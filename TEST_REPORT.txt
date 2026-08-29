@@ -1,0 +1,21 @@
+Collaudo Suite 1.1.6 - Test report
+Data: 2026-07-24
+
+Esito: 21 test automatici superati.
+Compilazione sintattica: completata con successo su tutti i moduli Python.
+
+Modifiche verificate:
+- selettore periodo MAP con 1 mese, 3 mesi, 6 mesi e 1 anno;
+- riferimento temporale basato sulla Data di collaudo dell'intestazione;
+- intervallo calcolato per mesi di calendario, con estremi inclusi;
+- esclusione dei MAP successivi alla data di collaudo;
+- lettura di date Excel native, seriali Excel e stringhe italiane/ISO;
+- riconoscimento di Last Modify, Last Modified, Data ultima modifica, Created Date, Data ticket e Data;
+- mancata confusione tra la colonna Data e intestazioni come Data Module;
+- errore esplicito se la colonna data manca o non contiene date valide;
+- lettura di date e hyperlink ticket in un unico passaggio del file Excel;
+- persistenza del periodo nelle preferenze e nei file lavoro;
+- regressione delle funzioni ticket, salvataggio, Salva con nome e Analyzer.
+
+Limite della verifica:
+- il test grafico completo non e stato eseguito nel container perche PySide6 non e installato nell'ambiente di test.

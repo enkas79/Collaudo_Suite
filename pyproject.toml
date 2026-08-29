@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "collaudo-suite"
+version = "1.1.7"
+description = "Suite desktop per analisi anomalie, preparazione controlli e checklist di collaudo."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7,<7",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+    "matplotlib>=3.8",
+    "rapidfuzz>=3.6",
+    "python-docx>=1.1.2",
+    "reportlab>=4.2",
+    "nltk>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+collaudo-suite = "collaudo_suite.main:main"
+
+[tool.setuptools]
+packages = [
+    "collaudo_suite",
+    "collaudo_suite.analyzer",
+    "collaudo_suite.checklist",
+    "collaudo_suite.checklist.data",
+]
+
+[tool.setuptools.package-data]
+"collaudo_suite.checklist.data" = ["*.docx", "*.xlsx", "schede/*.docx"]
