@@ -1,0 +1,67 @@
+name: Build installer Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "version.txt"
+      - "collaudo_suite/**"
+      - "run_suite.py"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/build-installers.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Imposta Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Leggi versione da version.txt
+        id: version
+        shell: bash
+        run: echo "version=$(tr -d '[:space:]' < version.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Installa dipendenze
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build eseguibile (PyInstaller)
+        run: >
+          python -m PyInstaller --noconfirm --clean --windowed
+          --name "CollaudoSuite"
+          --collect-all matplotlib
+          --collect-all nltk
+          --hidden-import PySide6.QtPrintSupport
+          --hidden-import collaudo_suite.checklist.data
+          --add-data "collaudo_suite\checklist\data;collaudo_suite\checklist\data"
+          --add-data "version.txt;."
+          run_suite.py
+
+      - name: Crea archivio installer
+        id: package
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          zip_name="CollaudoSuite-${version}-win64.zip"
+          (cd dist && 7z a -tzip "../${zip_name}" CollaudoSuite)
+          echo "asset=${zip_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Pubblica release GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Collaudo Suite ${{ steps.version.outputs.version }}
+          files: ${{ steps.package.outputs.asset }}
+          generate_release_notes: true

@@ -6,7 +6,8 @@ Applicazione PySide6 che integra Analyzer anomalie, preparazione dei controlli e
 
 - aggiunta la verifica automatica degli aggiornamenti: all'avvio la suite controlla in background (senza bloccare la GUI) l'ultima release pubblicata su GitHub e, se disponibile una versione più recente, propone di aprire la pagina di download;
 - aggiunta la voce di menu **Verifica aggiornamenti** per lanciare il controllo manualmente in qualsiasi momento;
-- la versione dell'applicazione viene ora letta dinamicamente da `version.txt` nella root del progetto (o nella cartella dell'eseguibile per le build Windows), anziché essere fissata nel codice.
+- la versione dell'applicazione viene ora letta dinamicamente da `version.txt` nella root del progetto (o nella cartella dell'eseguibile per le build Windows), anziché essere fissata nel codice;
+- aggiunto il workflow GitHub Actions `.github/workflows/build-installers.yml`: a ogni push su `main` che tocca `version.txt` o il codice, compila l'eseguibile Windows con PyInstaller, lo comprime in `CollaudoSuite-<versione>-win64.zip` e pubblica automaticamente una GitHub Release (tag `v<versione>`) con l'archivio allegato — è la release che la verifica aggiornamenti nell'app va a controllare.
 
 ## Modifiche della versione 1.1.7
 
@@ -67,3 +68,7 @@ collaudo-suite
 ## Creazione eseguibile Windows
 
 Eseguire `build_windows.bat`. Il risultato viene creato in `dist\CollaudoSuite\CollaudoSuite.exe`.
+
+## Build e release automatiche (CI)
+
+Il workflow `.github/workflows/build-installers.yml` si attiva a ogni push su `main` che modifica `version.txt` o il codice dell'app (oppure manualmente da GitHub Actions). Compila l'eseguibile Windows con PyInstaller, lo comprime e pubblica una GitHub Release con tag `v<versione presa da version.txt>` e l'archivio `CollaudoSuite-<versione>-win64.zip` come asset. La funzione "Verifica aggiornamenti" dell'app legge proprio questa release per proporre il download della nuova versione.
