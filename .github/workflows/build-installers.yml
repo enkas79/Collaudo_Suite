@@ -1,13 +1,13 @@
 name: Build Installers
 
 # Compila l'installer Windows (.exe via NSIS) e lo allega a una GitHub
-# Release taggata vX.Y.Z ogni volta che version.txt cambia su main.
+# Release taggata vX.Y.Z ogni volta che version.txt cambia su master.
 # La verifica aggiornamenti in-app (collaudo_suite/updater.py) legge
 # proprio questa release per proporre il download della nuova versione.
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - version.txt
   workflow_dispatch: {}
