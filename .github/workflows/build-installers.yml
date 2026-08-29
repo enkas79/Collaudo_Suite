@@ -1,42 +1,43 @@
-name: Build installer Windows
+name: Build Installers
+
+# Compila l'installer Windows (.exe via NSIS) e lo allega a una GitHub
+# Release taggata vX.Y.Z ogni volta che version.txt cambia su main.
+# La verifica aggiornamenti in-app (collaudo_suite/updater.py) legge
+# proprio questa release per proporre il download della nuova versione.
 
 on:
   push:
     branches: [main]
     paths:
-      - "version.txt"
-      - "collaudo_suite/**"
-      - "run_suite.py"
-      - "requirements.txt"
-      - "pyproject.toml"
-      - ".github/workflows/build-installers.yml"
+      - version.txt
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Imposta Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Leggi versione da version.txt
-        id: version
-        shell: bash
+      - uses: actions/checkout@v4
+      - id: read
         run: echo "version=$(tr -d '[:space:]' < version.txt)" >> "$GITHUB_OUTPUT"
 
-      - name: Installa dipendenze
-        run: |
+  build-windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
-
+      # onedir (default, senza --onefile): una vera cartella applicazione
+      # sotto Program Files; NSIS impacchetta l'intera dist\CollaudoSuite\.
       - name: Build eseguibile (PyInstaller)
         run: >
           python -m PyInstaller --noconfirm --clean --windowed
@@ -48,20 +49,29 @@ jobs:
           --add-data "collaudo_suite\checklist\data;collaudo_suite\checklist\data"
           --add-data "version.txt;."
           run_suite.py
-
-      - name: Crea archivio installer
-        id: package
-        shell: bash
+      - name: Install NSIS
         run: |
-          version="${{ steps.version.outputs.version }}"
-          zip_name="CollaudoSuite-${version}-win64.zip"
-          (cd dist && 7z a -tzip "../${zip_name}" CollaudoSuite)
-          echo "asset=${zip_name}" >> "$GITHUB_OUTPUT"
+          choco install nsis -y
+          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build installer
+        run: makensis /DVERSION=${{ needs.version.outputs.version }} packaging\windows\installer.nsi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: packaging/windows/CollaudoSuite-Setup-${{ needs.version.outputs.version }}.exe
 
-      - name: Pubblica release GitHub
+  release:
+    needs: [version, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Collaudo Suite ${{ steps.version.outputs.version }}
-          files: ${{ steps.package.outputs.asset }}
+          tag_name: v${{ needs.version.outputs.version }}
+          name: Collaudo Suite v${{ needs.version.outputs.version }}
           generate_release_notes: true
+          files: artifacts/windows-installer/*
