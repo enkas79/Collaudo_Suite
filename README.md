@@ -1,6 +1,10 @@
-# Collaudo Suite 1.1.8
+# Collaudo Suite 1.1.9
 
 Applicazione PySide6 che integra Analyzer anomalie, preparazione dei controlli e Checklist di collaudo.
+
+## Modifiche della versione 1.1.9
+
+- corretto un crash ("Internal C++ object (UpdateCheckWorker) already deleted") che si verificava premendo **Verifica aggiornamenti** dopo il primo controllo (automatico o manuale): lo stato del controllo ora è tracciato con un flag dedicato invece di interrogare un `QThread` potenzialmente già distrutto da `deleteLater`.
 
 ## Modifiche della versione 1.1.8
 

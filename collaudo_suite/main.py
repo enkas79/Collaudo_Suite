@@ -145,6 +145,7 @@ class SuiteMainWindow(QMainWindow):
         self.analyzer.apply_stylesheet()
 
         self._update_worker: UpdateCheckWorker | None = None
+        self._update_check_running = False
         QTimer.singleShot(STARTUP_UPDATE_CHECK_DELAY_MS, lambda: self._check_for_updates(silent=True))
 
     def _toolbar_icon(self, theme_name: str, fallback: QStyle.StandardPixmap) -> QIcon:
@@ -233,22 +234,32 @@ class SuiteMainWindow(QMainWindow):
         self.command_toolbar = toolbar
 
     def _check_for_updates(self, *, silent: bool) -> None:
-        if self._update_worker is not None and self._update_worker.isRunning():
+        if self._update_check_running:
             if not silent:
                 self.statusBar().showMessage("Verifica aggiornamenti già in corso...", 4000)
             return
 
         self._update_silent = silent
+        self._update_check_running = True
         worker = UpdateCheckWorker(APP_VERSION, self)
         worker.update_available.connect(self._on_update_available)
         worker.no_update.connect(self._on_no_update)
         worker.check_failed.connect(self._on_update_check_failed)
-        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_update_check_finished)
         self._update_worker = worker
 
         if not silent:
             self.statusBar().showMessage("Verifica aggiornamenti in corso...")
         worker.start()
+
+    def _on_update_check_finished(self) -> None:
+        # Azzera il riferimento prima di programmare la distruzione dell'oggetto Qt:
+        # isRunning() su un QThread già cancellato da Shiboken solleva RuntimeError.
+        self._update_check_running = False
+        worker = self._update_worker
+        self._update_worker = None
+        if worker is not None:
+            worker.deleteLater()
 
     def _on_update_available(self, info: UpdateInfo) -> None:
         self.statusBar().showMessage(f"Nuova versione disponibile: {info.version}", 10000)
