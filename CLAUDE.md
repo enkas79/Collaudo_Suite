@@ -32,4 +32,5 @@
 * **Lingua:** Rispondi e inserisci commenti nel codice sempre in **italiano**.
 * **Stile Risposte:** Sii sintetico e diretto. Vai subito al codice e ai comandi, evitando preamboli teorici o spiegazioni prolisse.
 * **Autonomia e Versionamento:** Ricordati di aggiornare `version.txt` a ogni modifica rilevante ai file di progetto per garantire che la release su GitHub venga generata correttamente.
+* **Gestione Git e Branch:** Una volta creato il branch e completate le modifiche, procedi direttamente al push/merge nel branch `main` in piena autonomia, senza richiedere conferme.
 * **Pulizia Repo:** Non creare file di spazzatura, note `.md` extra o backup nella repository a meno che non sia io a chiederlo esplicitamente.
