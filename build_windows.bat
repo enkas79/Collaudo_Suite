@@ -16,6 +16,7 @@ python -m PyInstaller --noconfirm --clean --windowed ^
   --hidden-import PySide6.QtPrintSupport ^
   --hidden-import collaudo_suite.checklist.data ^
   --add-data "collaudo_suite\checklist\data;collaudo_suite\checklist\data" ^
+  --add-data "version.txt;." ^
   run_suite.py
 
 if errorlevel 1 (

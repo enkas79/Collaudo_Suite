@@ -1,6 +1,12 @@
-# Collaudo Suite 1.1.7
+# Collaudo Suite 1.1.8
 
 Applicazione PySide6 che integra Analyzer anomalie, preparazione dei controlli e Checklist di collaudo.
+
+## Modifiche della versione 1.1.8
+
+- aggiunta la verifica automatica degli aggiornamenti: all'avvio la suite controlla in background (senza bloccare la GUI) l'ultima release pubblicata su GitHub e, se disponibile una versione più recente, propone di aprire la pagina di download;
+- aggiunta la voce di menu **Verifica aggiornamenti** per lanciare il controllo manualmente in qualsiasi momento;
+- la versione dell'applicazione viene ora letta dinamicamente da `version.txt` nella root del progetto (o nella cartella dell'eseguibile per le build Windows), anziché essere fissata nel codice.
 
 ## Modifiche della versione 1.1.7
 

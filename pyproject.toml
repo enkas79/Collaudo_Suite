@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "collaudo-suite"
-version = "1.1.7"
-description = "Suite desktop PySide6 per il collaudo software: analizza le anomalie ricorrenti, le trasforma in controlli operativi e li integra nella checklist di collaudo, con periodo MAP configurabile, salvataggio lavori ed esportazione PDF."
+version = "1.1.8"
+description = "Suite desktop PySide6 per il collaudo software: analizza le anomalie ricorrenti, le trasforma in controlli operativi e li integra nella checklist di collaudo, con periodo MAP configurabile, salvataggio lavori, esportazione PDF e verifica automatica degli aggiornamenti."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

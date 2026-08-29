@@ -3,8 +3,8 @@ from __future__ import annotations
 import sys
 import traceback
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -21,11 +21,16 @@ from PySide6.QtWidgets import (
 )
 
 from .analyzer.app import AnalyzerWindow
+from .app_info import APP_TITLE, get_app_version
 from .checklist.app import ChecklistWindow
 from .help_dialog import SuiteHelpDialog
+from .updater import UpdateCheckWorker, UpdateInfo
 
-APP_TITLE = "Collaudo Suite"
-APP_VERSION = "1.1.7"
+APP_VERSION = get_app_version()
+
+# Attesa prima del controllo automatico all'avvio, per non competere con il
+# caricamento iniziale della GUI e dei file interni.
+STARTUP_UPDATE_CHECK_DELAY_MS = 2500
 
 
 class HomePage(QWidget):
@@ -128,12 +133,19 @@ class SuiteMainWindow(QMainWindow):
         fixed_info_action.triggered.connect(self.checklist.show_fixed_info)
         self.menuBar().addAction(fixed_info_action)
 
+        update_action = QAction("Verifica aggiornamenti", self)
+        update_action.triggered.connect(lambda: self._check_for_updates(silent=False))
+        self.menuBar().addAction(update_action)
+
         self._build_command_toolbar()
 
         self.statusBar().showMessage("Pronto")
         self._apply_style()
         # Reapply module-specific styles after the suite stylesheet, which otherwise propagates to child windows.
         self.analyzer.apply_stylesheet()
+
+        self._update_worker: UpdateCheckWorker | None = None
+        QTimer.singleShot(STARTUP_UPDATE_CHECK_DELAY_MS, lambda: self._check_for_updates(silent=True))
 
     def _toolbar_icon(self, theme_name: str, fallback: QStyle.StandardPixmap) -> QIcon:
         icon = QIcon.fromTheme(theme_name)
@@ -220,6 +232,56 @@ class SuiteMainWindow(QMainWindow):
         )
         self.command_toolbar = toolbar
 
+    def _check_for_updates(self, *, silent: bool) -> None:
+        if self._update_worker is not None and self._update_worker.isRunning():
+            if not silent:
+                self.statusBar().showMessage("Verifica aggiornamenti già in corso...", 4000)
+            return
+
+        self._update_silent = silent
+        worker = UpdateCheckWorker(APP_VERSION, self)
+        worker.update_available.connect(self._on_update_available)
+        worker.no_update.connect(self._on_no_update)
+        worker.check_failed.connect(self._on_update_check_failed)
+        worker.finished.connect(worker.deleteLater)
+        self._update_worker = worker
+
+        if not silent:
+            self.statusBar().showMessage("Verifica aggiornamenti in corso...")
+        worker.start()
+
+    def _on_update_available(self, info: UpdateInfo) -> None:
+        self.statusBar().showMessage(f"Nuova versione disponibile: {info.version}", 10000)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Aggiornamento disponibile")
+        box.setText(f"È disponibile la versione {info.version} (versione attuale: {APP_VERSION}).")
+        if info.notes:
+            box.setDetailedText(info.notes)
+        open_button = box.addButton("Apri pagina download", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Più tardi", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_button:
+            target = info.download_url or info.release_url
+            if target:
+                QDesktopServices.openUrl(QUrl(target))
+
+    def _on_no_update(self) -> None:
+        if not self._update_silent:
+            self.statusBar().showMessage("Nessun aggiornamento disponibile.", 6000)
+            QMessageBox.information(self, "Aggiornamenti", "Stai già usando l'ultima versione disponibile.")
+
+    def _on_update_check_failed(self, message: str) -> None:
+        if not self._update_silent:
+            self.statusBar().showMessage("Verifica aggiornamenti non riuscita.", 6000)
+            QMessageBox.warning(
+                self,
+                "Verifica aggiornamenti",
+                "Non è stato possibile verificare la presenza di aggiornamenti.\n"
+                "Controlla la connessione a Internet e riprova.\n\n"
+                f"Dettagli: {message}",
+            )
+
     def _on_tab_changed(self, index: int) -> None:
         if self.tabs.widget(index) is self.checklist:
             QTimer.singleShot(0, self.checklist.refresh_layout)
@@ -259,6 +321,8 @@ class SuiteMainWindow(QMainWindow):
         if self.analyzer.worker and self.analyzer.worker.isRunning():
             self.analyzer.worker.stop()
             self.analyzer.worker.wait(1500)
+        if self._update_worker is not None and self._update_worker.isRunning():
+            self._update_worker.wait(4000)
         event.accept()
 
 
