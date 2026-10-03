@@ -8,15 +8,13 @@ from pathlib import Path
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QStandardPaths, Signal
-from PySide6.QtGui import QColor, QPalette, QTextCursor
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -34,7 +32,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -47,6 +44,7 @@ from .worker import AnalysisWorker
 
 
 from ..help_dialog import SuiteHelpDialog
+from ..styles import ANALYZER_QSS, enable_styled_combo_popup
 class AnalyzerWindow(QMainWindow):
     controls_ready = Signal(object)
     SIDEBAR_WIDTH = 410
@@ -136,7 +134,7 @@ class AnalyzerWindow(QMainWindow):
         self.combo_period.addItem("6 mesi", 6)
         self.combo_period.addItem("1 anno", 12)
         self.combo_period.setCurrentIndex(3)
-        self._style_combo_popup(self.combo_period)
+        enable_styled_combo_popup(self.combo_period)
         period_grid.addWidget(self.combo_period, 1, 0)
         controls_layout.addLayout(period_grid)
 
@@ -159,6 +157,7 @@ class AnalyzerWindow(QMainWindow):
         self.combo_algo.addItem("Combinato - consigliato", "combinato")
         self.combo_algo.addItem("Fuzzy", "fuzzy")
         self.combo_algo.addItem("Jaccard", "jaccard")
+        enable_styled_combo_popup(self.combo_algo)
         controls_layout.addWidget(self.combo_algo)
 
         advanced = QGridLayout()
@@ -304,21 +303,6 @@ class AnalyzerWindow(QMainWindow):
 
     def _toggle_sheet_field(self) -> None:
         self.txt_sheet.setEnabled(not self.chk_all_sheets.isChecked())
-
-    @staticmethod
-    def _style_combo_popup(combo: QComboBox) -> None:
-        """Keep popup text readable even when the dark sidebar stylesheet is active."""
-        view = combo.view()
-        palette = view.palette()
-        palette.setColor(QPalette.ColorRole.Base, QColor("#f4f4f4"))
-        palette.setColor(QPalette.ColorRole.Text, QColor("#202020"))
-        palette.setColor(QPalette.ColorRole.Highlight, QColor("#34495e"))
-        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
-        view.setPalette(palette)
-        view.setStyleSheet(
-            "QAbstractItemView { background-color: #f4f4f4; color: #202020; "
-            "selection-background-color: #34495e; selection-color: #ffffff; }"
-        )
 
     def show_help(self) -> None:
         SuiteHelpDialog(self, initial_tab=1).exec()
@@ -556,36 +540,4 @@ class AnalyzerWindow(QMainWindow):
         event.accept()
 
     def apply_stylesheet(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow { background: #f5f6fa; }
-            #sidebar, #sidebarControls, #sidebarScroll, #sidebarScroll > QWidget > QWidget { background: #2c3e50; border: none; }
-            #sidebar QLabel { color: #ecf0f1; }
-            #sidebarTitle { color: #67b7f7; font-size: 16px; font-weight: 800; }
-            #sectionTitle { color: #9fd1ff; font-weight: 800; margin-top: 4px; }
-            #fileLabel { color: #d0d7de; font-style: italic; }
-            #separator { background: #4b6175; max-height: 1px; }
-            #sidebar QLineEdit, #sidebar QSpinBox, #sidebar QComboBox {
-                min-height: 28px; padding: 3px 6px; border: 1px solid #60758a; border-radius: 4px;
-                background: #34495e; color: white;
-            }
-            #sidebar QComboBox QAbstractItemView {
-                background: #f4f4f4; color: #202020;
-                selection-background-color: #34495e; selection-color: white;
-                outline: none;
-            }
-            #sidebar QCheckBox { color: white; }
-            #sidebar QPushButton { min-height: 31px; background: #405a73; color: white; border: 0; border-radius: 5px; }
-            #sidebar QPushButton:hover { background: #4d6d8b; }
-            #btnStart { background: #268c4f; font-weight: 700; }
-            #btnStop { background: #a63a32; font-weight: 700; }
-            #btnExport { background: #2878a8; font-weight: 700; }
-            #btnExit { background: #6d7478; font-weight: 700; }
-            #btnMiniHelp { min-width: 28px; max-width: 28px; border-radius: 14px; background: #2878a8; font-weight: 800; }
-            #contentTitle { background: white; border: 1px solid #e0e4e8; border-radius: 7px; padding: 9px; font-size: 16px; font-weight: 800; }
-            QTextEdit, QTableWidget { background: white; border: 1px solid #d9dee3; border-radius: 6px; }
-            QTabWidget::pane { border: 1px solid #d9dee3; background: white; }
-            QTabBar::tab { padding: 7px 13px; background: #e8ebef; }
-            QTabBar::tab:selected { background: white; font-weight: 700; border-bottom: 2px solid #2878a8; }
-            """
-        )
+        self.setStyleSheet(ANALYZER_QSS)

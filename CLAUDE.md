@@ -1,7 +1,7 @@
 # Guidelines per Claude Code
 
 ## 1. Stack e Contesto Principale
-* **Linguaggio Principale:** Python 3.9+ (Focus assoluto, type hints PEP 484 obbligatori, standard OOP).
+* **Linguaggio Principale:** Python 3.11+ (vedi `requires-python` in `pyproject.toml`; focus assoluto, type hints PEP 484 obbligatori, standard OOP).
 * **Framework GUI:** Esclusivamente **PyQt6** o **PySide6** (Non usare Tkinter, CustomTkinter, Flet o altri framework).
 * **Controllo Versione & CI/CD:** GitHub Actions (Build ed esecutabili multi-piattaforma generati da PyInstaller / NSIS).
 * **Linguaggi Secondari (uso RARO):** PHP, JavaScript, Java. Usali solo se esplicitamente richiesto per integrazioni esterne.
@@ -32,7 +32,7 @@
 * **Gestione Errori:** Intercetta le eccezioni di rete o I/O silenziosamente in background o tramite dialoghi chiari (`QMessageBox.warning`/`QMessageBox.critical`) se l'azione è manuale, impedendo qualsiasi crash improvviso.
 
 ## 5. Comandi di Sviluppo & Test
-* **Esecuzione App:** `python src/main.py`
+* **Esecuzione App:** `python run_suite.py` (oppure `collaudo-suite` dopo `pip install -e .`)
 * **Test Suite:** `pytest` (priorità alla logica interna e modelli)
 * **Linter / Formatting:** `ruff check . --fix` (in alternativa `black .` / `flake8 .`)
 * **Dipendenze:** `pip freeze > requirements.txt`
@@ -41,7 +41,7 @@
 * **Lingua:** Rispondi e inserisci commenti nel codice sempre in **italiano**.
 * **Stile Risposte:** Diretto, asciutto, orientato al codice e ai comandi. Evita preamboli e conclusioni superflue.
 * **Autonomia e Versionamento:** Aggiorna `version.txt` a ogni modifica funzionale o strutturale.
-* **Gestione Git e Branch:** Completate e verificate le modifiche su un branch, esegui autonomamente push e merge su `main` senza richiedere conferme ridondanti.
+* **Gestione Git e Branch:** Completate e verificate le modifiche su un branch, esegui autonomamente push e merge su `master` (branch di default, che avvia la build) senza richiedere conferme ridondanti.
 * **Pulizia Workspace:** Non generare file `.md` effimeri di recap, note sparse o copie `.bak` se non espressamente richiesto.
 
 ## 7. Integrazione Plugin, Skill & Server MCP

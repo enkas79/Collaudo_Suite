@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "collaudo-suite"
-version = "1.1.13"
+dynamic = ["version"]
 description = "Suite desktop PySide6 per il collaudo software: analizza le anomalie ricorrenti, le trasforma in controlli operativi e li integra nella checklist di collaudo, con periodo MAP configurabile, salvataggio lavori, esportazione PDF e verifica automatica degli aggiornamenti."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +32,10 @@ addopts = "-ra"
 
 [project.scripts]
 collaudo-suite = "collaudo_suite.main:main"
+
+[tool.setuptools.dynamic]
+# Unica fonte della versione: version.txt (letto anche dall'app e dal workflow di build).
+version = { file = "version.txt" }
 
 [tool.setuptools]
 packages = [

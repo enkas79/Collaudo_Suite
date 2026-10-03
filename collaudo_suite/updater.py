@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
@@ -11,6 +15,9 @@ from .app_info import GITHUB_OWNER, GITHUB_REPO
 
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 REQUEST_TIMEOUT = 6
+DOWNLOAD_TIMEOUT = 30
+DOWNLOAD_CHUNK_SIZE = 256 * 1024
+USER_AGENT = "CollaudoSuite-Updater"
 
 
 @dataclass(frozen=True)
@@ -51,7 +58,7 @@ def fetch_latest_release() -> UpdateInfo | None:
     """
     request = urllib.request.Request(
         RELEASES_API_URL,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "CollaudoSuite-Updater"},
+        headers={"Accept": "application/vnd.github+json", "User-Agent": USER_AGENT},
     )
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -67,6 +74,75 @@ def fetch_latest_release() -> UpdateInfo | None:
         download_url=_pick_asset_url(assets),
         release_url=str(payload.get("html_url", "")),
     )
+
+
+def can_self_install(info: UpdateInfo, platform: str | None = None) -> bool:
+    """True se l'aggiornamento può essere scaricato e avviato direttamente dall'app.
+
+    Serve un installer Windows (.exe): negli altri casi resta solo l'apertura
+    della pagina di download.
+    """
+    platform = sys.platform if platform is None else platform
+    return platform == "win32" and info.download_url.lower().endswith(".exe")
+
+
+def installer_download_path(info: UpdateInfo, directory: Path | None = None) -> Path:
+    """Percorso locale (cartella temporanea) in cui salvare l'installer scaricato."""
+    name = info.download_url.rstrip("/").rsplit("/", 1)[-1] or f"CollaudoSuite-Setup-{info.version}.exe"
+    # Evita che un nome remoto anomalo esca dalla cartella di destinazione.
+    name = Path(name).name
+    base = directory if directory is not None else Path(tempfile.gettempdir()) / "CollaudoSuite-update"
+    return base / name
+
+
+def launch_installer(path: Path) -> None:
+    """Avvia l'installer scaricato tramite la shell di Windows (gestisce il prompt UAC)."""
+    if sys.platform != "win32":
+        raise OSError("L'installazione automatica è supportata solo su Windows.")
+    os.startfile(str(path))  # type: ignore[attr-defined]  # disponibile solo su Windows
+
+
+class UpdateDownloadWorker(QThread):
+    """Scarica l'installer della nuova versione in background, con avanzamento."""
+
+    progress = Signal(int, int)  # byte ricevuti, byte totali (0 se sconosciuti)
+    download_finished = Signal(str)  # percorso del file scaricato
+    download_failed = Signal(str)
+
+    def __init__(self, url: str, destination: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._url = url
+        self._destination = destination
+
+    def run(self) -> None:
+        partial = self._destination.with_name(self._destination.name + ".part")
+        try:
+            self._destination.parent.mkdir(parents=True, exist_ok=True)
+            request = urllib.request.Request(self._url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
+                total = int(response.headers.get("Content-Length") or 0)
+                received = 0
+                with open(partial, "wb") as handle:
+                    while True:
+                        if self.isInterruptionRequested():
+                            raise InterruptedError("Download annullato dall'utente.")
+                        chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                        received += len(chunk)
+                        self.progress.emit(received, total)
+            if total and received != total:
+                raise OSError(f"Download incompleto: ricevuti {received} byte su {total}.")
+            os.replace(partial, self._destination)
+        except Exception as exc:  # rete, disco o annullamento: mai crash della GUI
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.download_failed.emit(str(exc))
+            return
+        self.download_finished.emit(str(self._destination))
 
 
 class UpdateCheckWorker(QThread):

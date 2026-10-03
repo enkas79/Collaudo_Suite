@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from difflib import SequenceMatcher
 from itertools import combinations
-from typing import Iterable, Iterator
+from typing import Iterator
 
 try:
     from rapidfuzz import fuzz as rapid_fuzz  # type: ignore

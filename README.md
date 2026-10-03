@@ -1,6 +1,17 @@
-# Collaudo Suite 1.1.10
+# Collaudo Suite
 
 Applicazione PySide6 che integra Analyzer anomalie, preparazione dei controlli e Checklist di collaudo.
+
+La versione corrente è indicata in `version.txt`, unica fonte usata da applicazione, `pyproject.toml` e workflow di build.
+
+## Modifiche della versione 1.2.0
+
+- corretto il popup delle tendine nella barra laterale dell'Analyzer (*Anomalie negli ultimi*, algoritmo di analisi): le opzioni erano bianche su fondo chiaro e quindi illeggibili; ora il popup usa la palette scura della barra laterale;
+- barra dei menu riorganizzata: **File** (gli stessi comandi della toolbar), **Strumenti** (*Info file interni*) e **Aiuto** con *Guida* (F1), *Controlla aggiornamenti* e *Informazioni su Collaudo Suite* (autore e versione letta da `version.txt`);
+- aggiornamento dall'app: su Windows il pulsante **Scarica e installa** scarica in background l'installer della nuova release (con avanzamento e possibilità di annullare), salva il lavoro, chiude la suite e avvia l'installazione;
+- *Esporta PDF* e *Stampa PDF* generano il file in un thread separato: l'interfaccia non si blocca più durante la creazione del PDF;
+- stili dell'interfaccia (QSS) centralizzati nel modulo `collaudo_suite/styles.py`;
+- `pyproject.toml` legge la versione da `version.txt`.
 
 ## Modifiche della versione 1.1.9
 

@@ -6,9 +6,11 @@ from pathlib import Path
 APP_TITLE = "Collaudo Suite"
 GITHUB_OWNER = "enkas79"
 GITHUB_REPO = "Collaudo_Suite"
+APP_AUTHOR = "Enkas79"
+RELEASES_PAGE_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 
 # Usato solo se version.txt non è raggiungibile da nessuna posizione nota.
-_FALLBACK_VERSION = "1.1.10"
+_FALLBACK_VERSION = "0.0.0"
 
 
 def _version_file_candidates() -> list[Path]:
@@ -34,4 +36,10 @@ def get_app_version() -> str:
                     return text
         except OSError:
             continue
-    return _FALLBACK_VERSION
+    try:
+        # Pacchetto installato senza version.txt accanto (es. wheel): versione dai metadati.
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("collaudo-suite")
+    except PackageNotFoundError:
+        return _FALLBACK_VERSION

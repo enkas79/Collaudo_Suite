@@ -52,12 +52,14 @@ from .core import (
 from .jarvis_api import sync_map_xlsx_from_jarvis
 
 from ..help_dialog import SuiteHelpDialog
+from ..app_info import get_app_version
 from ..control_exchange import ExternalControl, import_controls
+from ..styles import CHECKLIST_TABLE_QSS
 
 APP_NAME = "Collaudo Suite - Checklist"
 ORG_NAME = "CollaudoTools"
 FIXED_SOURCE_LABEL = "Check list interna"
-PROJECT_VERSION = "1.1.13"
+PROJECT_VERSION = get_app_version()
 
 COL_N = 0
 COL_KIND = 1
@@ -116,6 +118,33 @@ class MapLoadWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class PdfExportWorker(QObject):
+    """Genera il PDF della checklist fuori dal thread della GUI."""
+
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, records: list[ChecklistRecord], output_path: Path, header_info: dict[str, str]) -> None:
+        super().__init__()
+        self.records = records
+        self.output_path = output_path
+        self.header_info = header_info
+
+    def run(self) -> None:
+        try:
+            path = export_pdf(
+                self.records,
+                self.output_path,
+                source_random="",
+                source_fixed=FIXED_SOURCE_LABEL,
+                header_info=self.header_info,
+                seed=None,
+            )
+            self.finished.emit(str(path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class ChecklistWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -134,6 +163,9 @@ class ChecklistWindow(QMainWindow):
         self._jarvis_sync_silent = False
         self._map_load_thread: QThread | None = None
         self._map_load_worker: MapLoadWorker | None = None
+        self._pdf_thread: QThread | None = None
+        self._pdf_worker: PdfExportWorker | None = None
+        self._pdf_for_print = False
 
         self._build_ui()
         self._load_settings()
@@ -327,33 +359,7 @@ class ChecklistWindow(QMainWindow):
         self.table.setMouseTracking(True)
         self.table.viewport().setMouseTracking(True)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked | QAbstractItemView.EditKeyPressed)
-        self.table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #ffffff;
-                gridline-color: #d9d9d9;
-                selection-background-color: #e6e6e6;
-                selection-color: #000000;
-            }
-            QTableWidget::item {
-                padding: 4px;
-            }
-            QTableWidget::item:hover {
-                background-color: #eeeeee;
-                color: #000000;
-            }
-            QTableWidget::item:selected {
-                background-color: #dcdcdc;
-                color: #000000;
-            }
-            QHeaderView::section {
-                background-color: #f3f3f3;
-                border: 1px solid #d0d0d0;
-                padding: 4px;
-                font-weight: 600;
-            }
-            """
-        )
+        self.table.setStyleSheet(CHECKLIST_TABLE_QSS)
 
         header = self.table.horizontalHeader()
         header.setMinimumSectionSize(36)
@@ -1236,16 +1242,6 @@ class ChecklistWindow(QMainWindow):
     def _default_project_path(self) -> str:
         return str(self._downloads_dir() / self._default_project_name())
 
-    def _export_pdf_to_path(self, path: str | Path) -> Path:
-        return export_pdf(
-            self._collect_records(),
-            path,
-            source_random="",
-            source_fixed=FIXED_SOURCE_LABEL,
-            header_info=self._header_info(),
-            seed=None,
-        )
-
     def _open_pdf(self, pdf_path: str | Path) -> None:
         path = Path(pdf_path).expanduser().resolve()
         if not path.is_file():
@@ -1268,24 +1264,56 @@ class ChecklistWindow(QMainWindow):
             return
         if not path.lower().endswith(".pdf"):
             path += ".pdf"
-        try:
-            pdf_path = self._export_pdf_to_path(path)
-            self._open_pdf(pdf_path)
-            QMessageBox.information(
-                self,
-                "Esportazione completata",
-                f"File creato e aperto con il lettore PDF predefinito:\n{pdf_path}",
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Errore esportazione PDF", str(exc))
+        self._start_pdf_export(Path(path), for_print=False)
 
     def print_pdf(self) -> None:
         if not self._ensure_preview():
             return
+        self._start_pdf_export(self._persistent_print_path(), for_print=True)
+
+    def _start_pdf_export(self, target: Path, *, for_print: bool) -> None:
+        if self._pdf_thread is not None:
+            QMessageBox.information(self, "Esportazione PDF", "Una generazione PDF è già in corso, attendere il completamento.")
+            return
+        # I dati della tabella si leggono qui (thread GUI); il worker riceve solo copie.
+        worker = PdfExportWorker(self._collect_records(), target, dict(self._header_info()))
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        # Slot legati a self (thread GUI): Qt usa una connessione accodata, mai lambda nel thread worker.
+        worker.finished.connect(self._on_pdf_export_finished)
+        worker.failed.connect(self._on_pdf_export_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_pdf_thread_finished)
+        self._pdf_thread = thread
+        self._pdf_worker = worker
+        self._pdf_for_print = for_print
+        self.summary_label.setText("Generazione PDF in corso...")
+        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        thread.start()
+
+    def _on_pdf_thread_finished(self) -> None:
+        QApplication.restoreOverrideCursor()
+        thread = self._pdf_thread
+        self._pdf_thread = None
+        self._pdf_worker = None
+        if thread is not None:
+            thread.deleteLater()
+
+    def _on_pdf_export_finished(self, pdf_path: str) -> None:
+        self.summary_label.setText(f"PDF creato: {pdf_path}")
         try:
-            pdf_path = self._persistent_print_path()
-            self._export_pdf_to_path(pdf_path)
             self._open_pdf(pdf_path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Errore apertura PDF",
+                f"Il PDF è stato creato ma non è stato possibile aprirlo.\n\nFile: {pdf_path}\nDettaglio: {exc}",
+            )
+            return
+        if self._pdf_for_print:
             QMessageBox.information(
                 self,
                 "PDF pronto per la stampa",
@@ -1293,13 +1321,24 @@ class ChecklistWindow(QMainWindow):
                 "Il lettore resterà aperto: usa il comando Stampa del lettore PDF (ad esempio Ctrl+P).\n\n"
                 f"File:\n{pdf_path}",
             )
-        except Exception as exc:
-            QMessageBox.critical(
+        else:
+            QMessageBox.information(
                 self,
-                "Errore apertura PDF",
-                "Non sono riuscito a creare o aprire il PDF per la stampa.\n\n"
-                f"Dettaglio: {exc}",
+                "Esportazione completata",
+                f"File creato e aperto con il lettore PDF predefinito:\n{pdf_path}",
             )
+
+    def _on_pdf_export_failed(self, message: str) -> None:
+        self.summary_label.setText("Generazione PDF non riuscita.")
+        title = "Errore apertura PDF" if self._pdf_for_print else "Errore esportazione PDF"
+        QMessageBox.critical(self, title, f"Non sono riuscito a creare il PDF.\n\nDettaglio: {message}")
+
+    def wait_for_background_tasks(self, timeout_ms: int = 5000) -> None:
+        """Attende i thread ancora attivi prima della chiusura dell'applicazione."""
+        for thread in (self._pdf_thread, self._map_load_thread):
+            if thread is not None and thread.isRunning():
+                thread.quit()
+                thread.wait(timeout_ms)
 
     def _project_payload(self) -> dict[str, Any]:
         return {
@@ -1361,6 +1400,7 @@ class ChecklistWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.autosave_on_exit()
         self._save_settings()
+        self.wait_for_background_tasks()
         event.accept()
 
     @staticmethod

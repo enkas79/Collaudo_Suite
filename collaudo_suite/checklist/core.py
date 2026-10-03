@@ -154,7 +154,6 @@ def is_probable_section_title(text: str) -> bool:
     # Sector titles are often uppercase, sometimes followed by a lowercase note in parentheses
     # such as "(Se presente)". Remove parenthetical notes before testing uppercase shape.
     title_core = re.sub(r"\([^)]*\)", "", cleaned).strip(" -")
-    title_words = title_core.split()
     if len(words) <= 10:
         letters = "".join(ch for ch in title_core if ch.isalpha())
         if letters and title_core.upper() == title_core:

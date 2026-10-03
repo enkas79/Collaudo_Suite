@@ -207,6 +207,9 @@ class SuiteHelpDialog(QDialog):
         <h2>Stampa PDF</h2>
         <p>Genera il PDF e lo apre nel visualizzatore predefinito, lasciando all'utente il controllo della stampa.</p>
 
+        <h2>Aggiornamenti</h2>
+        <p>All'avvio la suite verifica in background se è disponibile una nuova versione; il controllo si può avviare anche da <b>Aiuto &gt; Controlla aggiornamenti</b>. Su Windows il pulsante <b>Scarica e installa</b> scarica l'installer, salva il lavoro corrente, chiude l'applicazione e avvia l'installazione.</p>
+
         <h2>Verifiche prima della chiusura</h2>
         <ol>
           <li>Controllare che l'intestazione sia completa.</li>
