@@ -7,11 +7,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QDate, QSettings, QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtCore import QDate, QObject, QSettings, QStandardPaths, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCompleter,
     QDateEdit,
     QFileDialog,
     QGroupBox,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QProgressBar,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -47,6 +49,7 @@ from .core import (
     build_ticket_url,
     ticket_desc_sort_key,
 )
+from .jarvis_api import sync_map_xlsx_from_jarvis
 
 from ..help_dialog import SuiteHelpDialog
 from ..control_exchange import ExternalControl, import_controls
@@ -54,7 +57,7 @@ from ..control_exchange import ExternalControl, import_controls
 APP_NAME = "Collaudo Suite - Checklist"
 ORG_NAME = "CollaudoTools"
 FIXED_SOURCE_LABEL = "Check list interna"
-PROJECT_VERSION = "1.1.7"
+PROJECT_VERSION = "1.1.13"
 
 COL_N = 0
 COL_KIND = 1
@@ -63,6 +66,54 @@ COL_TEXT = 3
 COL_PASS = 4
 COL_NOPASS = 5
 COL_NOTE = 6
+
+
+class JarvisSyncWorker(QObject):
+    progress = Signal(int, int)
+    finished = Signal(str, int)
+    failed = Signal(str)
+
+    def __init__(self, token: str, output_path: Path) -> None:
+        super().__init__()
+        self.token = token
+        self.output_path = output_path
+
+    def run(self) -> None:
+        try:
+            path = sync_map_xlsx_from_jarvis(
+                self.token,
+                self.output_path,
+                progress_callback=lambda percent, processed: self.progress.emit(percent, processed),
+            )
+            self.finished.emit(str(path), 0)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class MapLoadWorker(QObject):
+    """Carica e filtra il file MAP senza bloccare il thread della GUI."""
+
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, path: Path, filter_text: str, reference_date: date, months_back: int) -> None:
+        super().__init__()
+        self.path = path
+        self.filter_text = filter_text
+        self.reference_date = reference_date
+        self.months_back = months_back
+
+    def run(self) -> None:
+        try:
+            items = load_map_items_for_filter(
+                self.path,
+                self.filter_text,
+                reference_date=self.reference_date,
+                months_back=self.months_back,
+            )
+            self.finished.emit(items)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class ChecklistWindow(QMainWindow):
@@ -78,10 +129,16 @@ class ChecklistWindow(QMainWindow):
         self.table_row_to_item_index: list[int | None] = []
         self.current_project_path: Path | None = None
         self.last_autosave_path: Path | None = None
+        self._jarvis_thread: QThread | None = None
+        self._jarvis_worker: JarvisSyncWorker | None = None
+        self._jarvis_sync_silent = False
+        self._map_load_thread: QThread | None = None
+        self._map_load_worker: MapLoadWorker | None = None
 
         self._build_ui()
         self._load_settings()
         self._load_fixed_items()
+        QTimer.singleShot(1200, self._auto_sync_jarvis_cache)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -166,7 +223,7 @@ class ChecklistWindow(QMainWindow):
         self.map_filter_combo.setEditable(True)
         self.map_filter_combo.addItems(available_map_filters())
         self.map_filter_combo.setCurrentText("Tutti")
-        map_layout.addWidget(QLabel("Filtro Commercial code MAP:"))
+        map_layout.addWidget(QLabel("Prefisso Commercial code MAP:"))
         map_layout.addWidget(self.map_filter_combo)
 
         self.map_period_combo = QComboBox()
@@ -180,6 +237,31 @@ class ChecklistWindow(QMainWindow):
         )
         map_layout.addWidget(QLabel("Periodo MAP rispetto alla data di collaudo:"))
         map_layout.addWidget(self.map_period_combo)
+
+        self.map_source_combo = QComboBox()
+        self.map_source_combo.addItem("File Excel", "excel")
+        self.map_source_combo.addItem("JARVIS API", "jarvis")
+        self.map_source_combo.currentIndexChanged.connect(self._update_map_source_ui)
+        map_layout.addWidget(QLabel("Sorgente MAP:"))
+        map_layout.addWidget(self.map_source_combo)
+
+        self.jarvis_token_edit = QLineEdit()
+        self.jarvis_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.jarvis_token_edit.setPlaceholderText("Token con permesso ticket.read")
+        self.jarvis_token_edit.setToolTip("Il token viene salvato solo nelle impostazioni locali dell'utente.")
+        map_layout.addWidget(QLabel("Token JARVIS:"))
+        map_layout.addWidget(self.jarvis_token_edit)
+
+        self.jarvis_sync_btn = QPushButton("Aggiorna MAP da JARVIS")
+        self.jarvis_sync_btn.clicked.connect(self.sync_jarvis_map)
+        map_layout.addWidget(self.jarvis_sync_btn)
+
+        self.jarvis_progress = QProgressBar()
+        self.jarvis_progress.setRange(0, 100)
+        self.jarvis_progress.setValue(0)
+        self.jarvis_progress.setFormat("Sincronizzazione JARVIS: %p%")
+        self.jarvis_progress.setVisible(False)
+        map_layout.addWidget(self.jarvis_progress)
 
         self.map_file_edit = QLineEdit()
         self.map_file_edit.setReadOnly(True)
@@ -304,6 +386,27 @@ class ChecklistWindow(QMainWindow):
         # gestiti dalla barra superiore di SuiteMainWindow.
         self.menuBar().hide()
 
+    def _update_map_source_ui(self) -> None:
+        is_jarvis = self.map_source_combo.currentData() == "jarvis"
+        self.jarvis_token_edit.setEnabled(is_jarvis)
+        self.jarvis_sync_btn.setEnabled(is_jarvis)
+        self.map_file_edit.setEnabled(not is_jarvis)
+
+    def _refresh_map_filter_options(self, path: Path | None = None) -> None:
+        current = self.map_filter_combo.currentText().strip() or "Tutti"
+        options = available_map_filters(path if path and path.exists() else None)
+        self.map_filter_combo.blockSignals(True)
+        self.map_filter_combo.clear()
+        self.map_filter_combo.addItems(options)
+        self.map_filter_combo.setCurrentText(current if current else "Tutti")
+        self.map_filter_combo.blockSignals(False)
+        completer = QCompleter(options, self.map_filter_combo)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._map_filter_completer = completer
+        self.map_filter_combo.setCompleter(completer)
+
     def _load_settings(self) -> None:
         # Mantiene solo le preferenze di estrazione.
         # L'intestazione deve essere sempre pulita a ogni nuovo avvio.
@@ -313,6 +416,13 @@ class ChecklistWindow(QMainWindow):
         period_index = self.map_period_combo.findData(saved_period)
         self.map_period_combo.setCurrentIndex(period_index if period_index >= 0 else self.map_period_combo.findData(12))
         self.map_file_edit.setText(str(self.settings.value("map_file_path", "")))
+        configured_map_path = Path(self.map_file_edit.text().strip()) if self.map_file_edit.text().strip() else get_default_map_xlsx_path()
+        self._refresh_map_filter_options(configured_map_path)
+        source = str(self.settings.value("map_source", "excel"))
+        source_index = self.map_source_combo.findData(source)
+        self.map_source_combo.setCurrentIndex(source_index if source_index >= 0 else 0)
+        self.jarvis_token_edit.setText(str(self.settings.value("jarvis_token", "")))
+        self._update_map_source_ui()
         self.operator_edit.clear()
         self.department_edit.clear()
         self.order_number_edit.clear()
@@ -324,6 +434,8 @@ class ChecklistWindow(QMainWindow):
         self.settings.setValue("map_filter", self.map_filter_combo.currentText().strip() or "Tutti")
         self.settings.setValue("map_period_months", self._selected_map_period_months())
         self.settings.setValue("map_file_path", self.map_file_edit.text().strip())
+        self.settings.setValue("map_source", self.map_source_combo.currentData() or "excel")
+        self.settings.setValue("jarvis_token", self.jarvis_token_edit.text().strip())
 
 
     def set_today(self) -> None:
@@ -370,6 +482,85 @@ class ChecklistWindow(QMainWindow):
             return Path(path_text)
         return get_default_map_xlsx_path()
 
+    def _selected_map_source(self) -> str:
+        return str(self.map_source_combo.currentData() or "excel")
+
+    def _jarvis_cache_path(self) -> Path:
+        base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        root = Path(base) if base else Path.home() / ".collaudo_suite"
+        return root / "map_cache_jarvis.xlsx"
+
+    def _auto_sync_jarvis_cache(self) -> None:
+        if self._selected_map_source() != "jarvis":
+            return
+        if not self._jarvis_cache_path().exists() or not self.jarvis_token_edit.text().strip():
+            return
+        self.sync_jarvis_map(silent=True)
+
+    def sync_jarvis_map(self, *, silent: bool = False) -> None:
+        """Refresh the local Excel cache used by the JARVIS MAP source."""
+        if self._jarvis_thread is not None and self._jarvis_thread.isRunning():
+            return
+        token = self.jarvis_token_edit.text().strip()
+        if not token:
+            QMessageBox.warning(self, "Token JARVIS mancante", "Inserire un token con permesso ticket.read.")
+            return
+        self._save_settings()
+        self._jarvis_sync_silent = silent
+        self.jarvis_sync_btn.setEnabled(False)
+        self.jarvis_progress.setVisible(True)
+        self.jarvis_progress.setValue(0)
+        self.jarvis_progress.setFormat("Sincronizzazione JARVIS: avvio...")
+
+        thread = QThread(self)
+        worker = JarvisSyncWorker(token, self._jarvis_cache_path())
+        worker.moveToThread(thread)
+        worker.progress.connect(self._on_jarvis_sync_progress)
+        worker.finished.connect(self._on_jarvis_sync_finished)
+        worker.failed.connect(self._on_jarvis_sync_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_jarvis_thread_finished)
+        self._jarvis_thread = thread
+        self._jarvis_worker = worker
+        thread.start()
+
+    def _on_jarvis_sync_progress(self, percent: int, processed: int) -> None:
+        self.jarvis_progress.setValue(max(0, min(100, percent)))
+        self.jarvis_progress.setFormat(f"Sincronizzazione JARVIS: {processed} ticket letti (%p%)")
+
+    def _on_jarvis_sync_finished(self, path: str, _unused: int) -> None:
+        self.jarvis_progress.setValue(100)
+        self.jarvis_progress.setFormat("Cache MAP aggiornata (%p%)")
+        self.map_file_edit.setText(path)
+        self._save_settings()
+        self._refresh_map_filter_options(Path(path))
+        if not self._jarvis_sync_silent:
+            QMessageBox.information(
+                self,
+                "MAP JARVIS aggiornato",
+                f"Cache locale aggiornata con successo.\n\nFile: {path}",
+            )
+        if self._selected_map_source() == "jarvis":
+            QTimer.singleShot(0, self.refresh_preview)
+
+    def _on_jarvis_sync_failed(self, message: str) -> None:
+        self.jarvis_progress.setVisible(False)
+        self.jarvis_sync_btn.setEnabled(self._selected_map_source() == "jarvis")
+        if self._jarvis_sync_silent:
+            self.summary_label.setText(f"Aggiornamento automatico MAP non riuscito: {message}")
+        else:
+            QMessageBox.critical(self, "Errore aggiornamento MAP JARVIS", message)
+
+    def _on_jarvis_thread_finished(self) -> None:
+        self._jarvis_thread = None
+        self._jarvis_worker = None
+        self._jarvis_sync_silent = False
+        self.jarvis_sync_btn.setEnabled(self._selected_map_source() == "jarvis")
+        QTimer.singleShot(700, lambda: self.jarvis_progress.setVisible(False))
+
     def browse_map_file(self) -> None:
         start_dir = str(self._downloads_dir())
         current = self.map_file_edit.text().strip()
@@ -379,6 +570,7 @@ class ChecklistWindow(QMainWindow):
         if not path:
             return
         self.map_file_edit.setText(path)
+        self._refresh_map_filter_options(Path(path))
         self._save_settings()
 
     @staticmethod
@@ -437,12 +629,14 @@ class ChecklistWindow(QMainWindow):
         self._update_external_label()
 
         if self.current_items:
-            records = [record for record in self._collect_records() if record.kind != "ANALYZER"]
-            records.extend(
+            previous = self._collect_records()
+            records = [record for record in previous if record.kind != "ANALYZER"]
+            analyzer_records = [
                 ChecklistRecord(item.text, item.source, item.kind, ticket_number=item.ticket_number, ticket_url=item.ticket_url)
                 for item in self.external_items
-            )
-            self._apply_records_to_table(records)
+            ]
+            analyzer_records = self._records_with_saved_state(analyzer_records, previous)
+            self._replace_table_section("ANALYZER", analyzer_records, records)
             self.summary_label.setText(
                 f"Checklist aggiornata con {len(self.external_items)} controlli importati da Analyzer. "
                 "I risultati Pass/No pass già compilati sugli altri controlli sono stati mantenuti."
@@ -456,10 +650,46 @@ class ChecklistWindow(QMainWindow):
         self._update_external_label()
         if self.current_items:
             records = [record for record in self._collect_records() if record.kind != "ANALYZER"]
-            self._apply_records_to_table(records)
+            self._replace_table_section("ANALYZER", [], records)
             self.summary_label.setText("Controlli Analyzer rimossi dalla checklist corrente.")
 
-    def refresh_preview(self) -> None:
+    def _start_map_load(self, path: Path, map_filter: str) -> None:
+        if self._map_load_thread is not None and self._map_load_thread.isRunning():
+            return
+        self.preview_btn.setEnabled(False)
+        self.summary_label.setText("Caricamento e filtro del file MAP in corso...")
+        thread = QThread(self)
+        worker = MapLoadWorker(
+            path,
+            map_filter,
+            reference_date=self._collaudo_reference_date(),
+            months_back=self._selected_map_period_months(),
+        )
+        worker.moveToThread(thread)
+        worker.finished.connect(self._on_map_load_finished)
+        worker.failed.connect(self._on_map_load_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_map_load_thread_finished)
+        self._map_load_thread = thread
+        self._map_load_worker = worker
+        thread.start()
+
+    def _on_map_load_finished(self, items: object) -> None:
+        self.preview_btn.setEnabled(True)
+        self.refresh_preview(_loaded_map_pool=list(items))
+
+    def _on_map_load_failed(self, message: str) -> None:
+        self.preview_btn.setEnabled(True)
+        QMessageBox.critical(self, "Errore lettura MAP", message)
+
+    def _on_map_load_thread_finished(self) -> None:
+        self._map_load_thread = None
+        self._map_load_worker = None
+
+    def refresh_preview(self, *, _loaded_map_pool: list[ChecklistItem] | None = None) -> None:
         try:
             self._save_settings()
             if not self.fixed_items:
@@ -471,22 +701,35 @@ class ChecklistWindow(QMainWindow):
             warnings: list[str] = []
 
             map_filter = self._selected_map_filter()
-            map_path = self._selected_map_path()
             self.map_pool = []
             map_items: list[ChecklistItem] = []
             if self.map_count_spin.value() > 0:
-                if not map_path.exists():
-                    warnings.append(
-                        "Il file MAP interno non è presente. La lista è stata creata senza controlli MAP; "
-                        "seleziona un file MAP esterno con Sfoglia per abilitarne l'estrazione."
-                    )
+                if _loaded_map_pool is None:
+                    if self._selected_map_source() == "jarvis":
+                        map_path = self._jarvis_cache_path()
+                        if not map_path.exists():
+                            self.sync_jarvis_map()
+                            return
+                    else:
+                        map_path = self._selected_map_path()
+                    if map_path.exists():
+                        self._start_map_load(map_path, map_filter)
+                        return
+
+                if self._selected_map_source() == "jarvis":
+                    cache_path = self._jarvis_cache_path()
+                    self.map_file_edit.setText(str(cache_path))
+                    self.map_pool = list(_loaded_map_pool or [])
                 else:
-                    self.map_pool = load_map_items_for_filter(
-                        map_path,
-                        map_filter,
-                        reference_date=self._collaudo_reference_date(),
-                        months_back=self._selected_map_period_months(),
-                    )
+                    map_path = self._selected_map_path()
+                    if not map_path.exists():
+                        warnings.append(
+                            "Il file MAP interno non è presente. La lista è stata creata senza controlli MAP; "
+                            "seleziona un file MAP esterno con Sfoglia per abilitarne l'estrazione."
+                        )
+                    else:
+                        self.map_pool = list(_loaded_map_pool or [])
+                if self.map_pool:
                     map_items, map_warnings = sample_items_from_pool(
                         self.map_pool,
                         self.map_count_spin.value(),
@@ -499,9 +742,18 @@ class ChecklistWindow(QMainWindow):
 
             used_keys = {self._control_key(item.text) for item in base_items + map_items}
             external_items = [item for item in self.external_items if self._control_key(item.text) not in used_keys]
-            self.current_items = base_items + map_items + external_items
+            old_records = self._collect_records() if self.current_items else []
+            map_records = self._records_with_saved_state(map_items, old_records)
+            fixed_records = self._records_with_saved_state(base_items, old_records)
+            analyzer_records = self._records_with_saved_state(external_items, old_records)
+            all_records = fixed_records + map_records + analyzer_records
             self.current_project_path = None
-            self._populate_table(self.current_items)
+            if self.current_items:
+                self._replace_table_section("MAP", map_records, fixed_records + analyzer_records)
+                self._replace_table_section("Fisso", fixed_records, map_records + analyzer_records)
+                self._replace_table_section("ANALYZER", analyzer_records, fixed_records + map_records)
+            else:
+                self._apply_records_to_table(all_records)
 
             fixed_count = sum(1 for item in self.current_items if item.kind == "Fisso")
             map_count = sum(1 for item in self.current_items if item.kind == "MAP")
@@ -511,7 +763,8 @@ class ChecklistWindow(QMainWindow):
                 f"{analyzer_count} controlli Analyzer = {len(self.current_items)} controlli totali. "
                 f"Pool MAP Commercial code '{map_filter or 'Tutti'}': {len(self.map_pool)}. "
                 f"Periodo: {self._map_period_label()} fino al {self.date_edit.date().toString('dd/MM/yyyy')}. "
-                "Fonte MAP: file riepilogativo selezionato. Estrazione casuale a ogni aggiornamento."
+                f"Fonte MAP: {'JARVIS API' if self._selected_map_source() == 'jarvis' else 'file riepilogativo'}. "
+                "Estrazione casuale a ogni aggiornamento."
             )
             if warnings:
                 msg += "  Avvisi: " + " | ".join(warnings)
@@ -578,6 +831,161 @@ class ChecklistWindow(QMainWindow):
         self.table.setItem(row, 0, self._section_item(title, count))
         self.table.setRowHeight(row, 28)
         self.table_row_to_item_index.append(None)
+
+    @staticmethod
+    def _record_key(record: ChecklistRecord | ChecklistItem) -> tuple[str, str, str]:
+        return (
+            str(record.kind).casefold(),
+            ChecklistWindow._control_key(record.text),
+            str(record.ticket_number).strip(),
+        )
+
+    def _records_with_saved_state(
+        self, items: list[ChecklistItem], previous: list[ChecklistRecord]
+    ) -> list[ChecklistRecord]:
+        previous_by_key = {self._record_key(record): record for record in previous}
+        records: list[ChecklistRecord] = []
+        for item in items:
+            saved = previous_by_key.get(self._record_key(item))
+            records.append(
+                ChecklistRecord(
+                    item.text,
+                    item.source,
+                    item.kind,
+                    result=saved.result if saved else "",
+                    note=saved.note if saved else "",
+                    ticket_number=item.ticket_number,
+                    ticket_url=item.ticket_url,
+                )
+            )
+        return records
+
+    def _section_title(self, kind: str) -> str:
+        return {
+            "Fisso": "CONTROLLI FISSI",
+            "MAP": "SEGNALAZIONI MAP",
+            "ANALYZER": "CONTROLLI IMPORTATI DA ANALYZER",
+        }.get(kind, kind)
+
+    def _section_rows(self, kind: str) -> tuple[int, int] | None:
+        title = self._section_title(kind)
+        start = None
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, COL_N)
+            if item is not None and item.text().split(" (")[0] == title:
+                start = row
+                break
+        if start is None:
+            return None
+        end = start + 1
+        while end < self.table.rowCount():
+            item = self.table.item(end, COL_N)
+            if item is not None and item.text().split(" (")[0] in {
+                "CONTROLLI FISSI", "SEGNALAZIONI MAP", "CONTROLLI IMPORTATI DA ANALYZER"
+            }:
+                break
+            end += 1
+        return start, end
+
+    def _write_data_row(self, row: int, item: ChecklistItem, display_number: int, record: ChecklistRecord | None = None) -> None:
+        self.table.setItem(row, COL_N, self._readonly_item(str(display_number), Qt.AlignCenter))
+        self.table.setItem(row, COL_KIND, self._readonly_item(item.kind, Qt.AlignCenter))
+        ticket_cell = self._readonly_item(item.ticket_number, Qt.AlignCenter)
+        ticket_url = item.ticket_url.strip() or build_ticket_url(item.ticket_number)
+        if ticket_url:
+            font = ticket_cell.font()
+            font.setUnderline(True)
+            ticket_cell.setFont(font)
+            ticket_cell.setForeground(QColor("#0563c1"))
+            ticket_cell.setToolTip("Clic per aprire il ticket")
+            ticket_cell.setData(Qt.UserRole + 1, ticket_url)
+        self.table.setItem(row, COL_TICKET, ticket_cell)
+        self.table.setItem(row, COL_TEXT, self._readonly_item(item.text))
+        self.table.setItem(row, COL_PASS, self._check_item())
+        self.table.setItem(row, COL_NOPASS, self._check_item())
+        note_item = QTableWidgetItem(record.note if record else "")
+        note_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+        self.table.setItem(row, COL_NOTE, note_item)
+        self._apply_row_background(row, item.kind)
+        if record:
+            if record.result == "Pass":
+                self._set_result_cell(row, COL_PASS, True)
+            elif record.result == "No pass":
+                self._set_result_cell(row, COL_NOPASS, True)
+
+    def _refresh_table_mapping(self) -> None:
+        self.table_row_to_item_index = []
+        display_number = 1
+        for row in range(self.table.rowCount()):
+            section = self.table.item(row, COL_N)
+            if section is not None and section.text().split(" (")[0] in {
+                "CONTROLLI FISSI", "SEGNALAZIONI MAP", "CONTROLLI IMPORTATI DA ANALYZER"
+            }:
+                self.table_row_to_item_index.append(None)
+                continue
+            kind_item = self.table.item(row, COL_KIND)
+            if kind_item is None:
+                self.table_row_to_item_index.append(None)
+                continue
+            kind = kind_item.text()
+            candidates = [
+                idx for idx, item in enumerate(self.current_items)
+                if item.kind == kind and idx not in self.table_row_to_item_index
+            ]
+            candidates.sort(key=lambda idx: ticket_desc_sort_key(self.current_items[idx].ticket_number), reverse=True)
+            idx = candidates[0] if candidates else None
+            self.table_row_to_item_index.append(idx)
+            if idx is not None:
+                self.table.item(row, COL_N).setText(str(display_number))
+                display_number += 1
+
+    def _replace_table_section(
+        self, kind: str, records: list[ChecklistRecord], other_records: list[ChecklistRecord]
+    ) -> None:
+        """Replace only one visual section, preserving widgets in all other sections."""
+        ordered_records = records
+        items = [ChecklistItem(r.text, r.source, r.kind, ticket_number=r.ticket_number, ticket_url=r.ticket_url) for r in ordered_records]
+        self.current_items = [
+            ChecklistItem(r.text, r.source, r.kind, ticket_number=r.ticket_number, ticket_url=r.ticket_url)
+            for r in (other_records + records)
+        ]
+        self.table.blockSignals(True)
+        section = self._section_rows(kind)
+        if section is None:
+            if not items:
+                self.table.blockSignals(False)
+                return
+            insert_at = self.table.rowCount()
+            group_order = ("Fisso", "MAP", "ANALYZER")
+            kind_position = group_order.index(kind)
+            for candidate_kind in group_order[kind_position + 1:]:
+                found = self._section_rows(candidate_kind)
+                if found:
+                    insert_at = found[0]
+                    break
+            self.table.insertRow(insert_at)
+            self.table.setSpan(insert_at, 0, 1, self.table.columnCount())
+            self.table.setItem(insert_at, 0, self._section_item(self._section_title(kind), len(items)))
+            section = (insert_at, insert_at + 1)
+        start, end = section
+        old_data_count = end - start - 1
+        new_data_count = len(items)
+        for row in range(start + old_data_count, start + new_data_count, -1):
+            self.table.removeRow(row)
+        for _ in range(new_data_count - old_data_count):
+            self.table.insertRow(end)
+        if not items:
+            self.table.removeRow(start)
+        else:
+            self.table.item(start, 0).setText(f"{self._section_title(kind)} ({len(items)})")
+            sorted_pairs = list(enumerate(ordered_records))
+            sorted_pairs.sort(key=lambda pair: ticket_desc_sort_key(pair[1].ticket_number), reverse=True)
+            for offset, (index, record) in enumerate(sorted_pairs, start=1):
+                self._write_data_row(start + offset, items[index], 0, record)
+        self._refresh_table_mapping()
+        self.table.blockSignals(False)
+        self.table.resizeRowsToContents()
+        self._fit_table_columns()
 
     def _populate_table(self, items: list[ChecklistItem]) -> None:
         self.table.blockSignals(True)
@@ -694,6 +1102,9 @@ class ChecklistWindow(QMainWindow):
             self.map_filter_combo,
             self.map_period_combo,
             self.map_file_edit,
+            self.map_source_combo,
+            self.jarvis_token_edit,
+            self.jarvis_progress,
         ):
             field.setMinimumHeight(28)
             field.updateGeometry()
@@ -899,6 +1310,7 @@ class ChecklistWindow(QMainWindow):
             "map_filter": self.map_filter_combo.currentText().strip() or "Tutti",
             "map_period_months": self._selected_map_period_months(),
             "map_file_path": self.map_file_edit.text().strip(),
+            "map_source": self._selected_map_source(),
             "items": [
                 {
                     "text": record.text,
@@ -907,6 +1319,8 @@ class ChecklistWindow(QMainWindow):
                     "ticket_number": record.ticket_number,
                     "ticket_url": record.ticket_url,
                     "result": record.result,
+                    "pass": record.result == "Pass",
+                    "nopass": record.result == "No pass",
                     "note": record.note,
                 }
                 for record in self._collect_records()
@@ -1014,6 +1428,10 @@ class ChecklistWindow(QMainWindow):
             if period_index >= 0:
                 self.map_period_combo.setCurrentIndex(period_index)
             self.map_file_edit.setText(str(data.get("map_file_path", "")))
+            source = str(data.get("map_source", "excel"))
+            source_index = self.map_source_combo.findData(source)
+            self.map_source_combo.setCurrentIndex(source_index if source_index >= 0 else 0)
+            self._update_map_source_ui()
 
             records: list[ChecklistRecord] = []
             for raw in data.get("items", []):
@@ -1027,6 +1445,11 @@ class ChecklistWindow(QMainWindow):
                 ticket_number = str(raw.get("ticket_number", raw.get("ticket", "")))
                 ticket_url = str(raw.get("ticket_url", ""))
                 result = str(raw.get("result", ""))
+                if not result:
+                    if bool(raw.get("pass", False)):
+                        result = "Pass"
+                    elif bool(raw.get("nopass", False)):
+                        result = "No pass"
                 if result not in {"", "Pass", "No pass"}:
                     result = ""
                 note = str(raw.get("note", ""))

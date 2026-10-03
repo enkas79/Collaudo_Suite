@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from collections import Counter
+from datetime import date
 from typing import Callable
 
 import pandas as pd
@@ -16,6 +17,21 @@ LogFn = Callable[[str], None]
 ProgressFn = Callable[[int], None]
 StatusFn = Callable[[str], None]
 StopFn = Callable[[], bool]
+
+
+def _period_bounds(months_back: int) -> tuple[date, date]:
+    """Return the inclusive calendar-month period ending today.
+
+    For example, on 2 October, six months means 1 May through 2 October.
+    """
+    if months_back not in {1, 3, 6, 12}:
+        raise ValueError("Il periodo deve essere di 1, 3, 6 o 12 mesi.")
+    end = date.today()
+    month_index = end.year * 12 + end.month - 1 - (months_back - 1)
+    start_year, start_month_zero = divmod(month_index, 12)
+    start_month = start_month_zero + 1
+    start = date(start_year, start_month, 1)
+    return start, end
 
 
 class ExcelDataLoader:
@@ -48,6 +64,8 @@ class ExcelDataLoader:
 
     def collect_records(self) -> tuple[list[RowRecord], list[str]]:
         records: list[RowRecord] = []
+        period_start, period_end = _period_bounds(self.params.period_months)
+        excluded_by_period = 0
         estimated_units = max(len(self.params.files), 1)
         processed_files = 0
 
@@ -77,6 +95,7 @@ class ExcelDataLoader:
                 sheet = self.params.sheet_name.strip() or "Punti Aperti"
                 if sheet not in xls.sheet_names:
                     self._warn(f"Foglio '{sheet}' non trovato in {file_name}. Fogli disponibili: {', '.join(xls.sheet_names)}")
+                    xls.close()
                     processed_files += 1
                     self.progress(int(processed_files / estimated_units * 35))
                     continue
@@ -138,6 +157,10 @@ class ExcelDataLoader:
                             else:
                                 invalid_dates += 1
 
+                    if date_iso is None or not (period_start.isoformat() <= date_iso <= period_end.isoformat()):
+                        excluded_by_period += 1
+                        continue
+
                     records.append(
                         RowRecord(
                             file_path=filepath,
@@ -158,6 +181,7 @@ class ExcelDataLoader:
                 if invalid_dates:
                     self._warn(f"{invalid_dates} date non interpretabili in {file_name} / {sheet_name}.")
 
+            xls.close()
             processed_files += 1
             self.progress(int(processed_files / estimated_units * 35))
 
@@ -168,5 +192,10 @@ class ExcelDataLoader:
                 self.log(f"  - {file_name}: {count}\n")
         else:
             self.log("Nessuna riga utile letta.\n")
+
+        self.log(
+            f"Periodo anomalie: {period_start.isoformat()} - {period_end.isoformat()} "
+            f"({self.params.period_months} mesi). Righe escluse dal periodo: {excluded_by_period}.\n"
+        )
 
         return records, self.warnings

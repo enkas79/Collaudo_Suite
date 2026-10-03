@@ -110,6 +110,20 @@ def _norm_key(text: str) -> str:
     return re.sub(r"\W+", "", text.casefold())
 
 
+def _map_status_is_rejected(value: object) -> bool:
+    """Return True for MAP states that must never enter the checklist."""
+    if isinstance(value, dict):
+        return any(_map_status_is_rejected(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_map_status_is_rejected(item) for item in value)
+    text = str(value or "").strip().casefold()
+    if not text:
+        return False
+    if re.search(r"\bnon\s+(rifiutat\w*|reject\w*)", text):
+        return False
+    return bool(re.search(r"(?:^|[\s:_/\\-])(rifiutat\w*|reject\w*|declin\w*|refus\w*|denied\w*)", text))
+
+
 def is_meta_line(text: str) -> bool:
     if not text:
         return True
@@ -697,8 +711,6 @@ def _map_filter_matches(commercial_code: str, title: str, ticket_number: str, fi
     """Return True when a MAP row matches the selected commercial-code filter.
 
     Primary rule: Commercial code contains the filter text.
-    Practical fallback: some MAP rows expose the useful machine code inside the Title, or the user
-    may paste a ticket/order reference. In those cases the Title/Ticket fields are also checked.
     An empty filter means all MAP rows with a Title are eligible.
     """
     normalized_filter = _norm_key(filter_text)
@@ -706,25 +718,8 @@ def _map_filter_matches(commercial_code: str, title: str, ticket_number: str, fi
         return True
 
     normalized_code = _norm_key(commercial_code)
-    normalized_title = _norm_key(title)
-    normalized_ticket = _norm_key(ticket_number)
-
-    # Main requested behavior: Commercial code contains the selected key.
-    if normalized_filter in normalized_code:
-        return True
-
-    # Useful aliases seen in the MAP export. Keep this conservative.
-    aliases = {normalized_filter}
-    if normalized_filter == "nc300":
-        aliases.update({"wp0300", "wp0300k"})
-
-    if any(alias and alias in normalized_code for alias in aliases):
-        return True
-
-    # Fallback for real-world MAP rows where the commercial-code cell is generic but the title
-    # contains the machine/order reference. This prevents an empty pool when the operator enters
-    # a commessa or an old code that appears in the Title.
-    return normalized_filter in normalized_title or normalized_filter in normalized_ticket
+    # Main requested behavior: allow the selected code anywhere in the value.
+    return normalized_filter in normalized_code
 
 
 
@@ -825,7 +820,7 @@ def extract_map_items_from_xlsx(
     - Ticket number: Ticket Number/Numero Ticket column, when present.
     - Main filter: Commercial code/Codice commerciale contains ``filter_text``.
     - Empty filter: use all rows with a valid Title.
-    - Practical fallback: Title and Ticket Number are also searched for the typed filter.
+    - Commercial-code filter: the normalized Commercial code contains ``filter_text``.
     - Optional period filter: include only rows dated between ``reference_date - months_back``
       and the reference date, both inclusive.
     """
@@ -836,6 +831,7 @@ def extract_map_items_from_xlsx(
 
     header_row_idx, title_idx, code_idx, ticket_idx = _find_map_header_row(rows)
     headers = rows[header_row_idx]
+    status_idx = _find_header_index_any(headers, ("Status", "Stato", "Ticket status", "Stato ticket"))
     date_idx = _find_map_date_index(headers)
 
     period_start: date | None = None
@@ -869,6 +865,8 @@ def extract_map_items_from_xlsx(
         title = _row_value(row, title_idx)
         commercial_code = _row_value(row, code_idx)
         ticket_number = _row_value(row, ticket_idx)
+        if status_idx is not None and _map_status_is_rejected(_row_value(row, status_idx)):
+            continue
         if not title:
             continue
         if period_start is not None and period_end is not None:
@@ -917,13 +915,83 @@ def load_default_map_items_for_machine(machine_name: str) -> list[ChecklistItem]
     return load_default_map_items_for_filter(machine_name)
 
 
-def available_map_filters() -> list[str]:
-    """Return common Commercial-code prefixes found in the bundled MAP file.
+def _commercial_code_family(value: object) -> str:
+    """Derive a selectable machine family from a commercial code."""
+    code = re.sub(r"[\s_-]+", "", str(value or "")).upper()
+    if not code:
+        return ""
+    for model in NUMERIC_MAP_FILTER_FAMILIES:
+        if code.startswith(model):
+            return model
+    if code.startswith("NC"):
+        match = re.match(r"NC\d{1,3}", code)
+        if match:
+            return match.group(0)
+    match = re.match(r"[A-Z]+", code)
+    return match.group(0) if match else code
 
-    This is intentionally compact: the GUI shows the three filters most useful for this project,
-    but the operator can still type any other filter.
+
+DISCOVERED_MAP_FILTER_FAMILIES: tuple[str, ...] = (
+    "AGCALRG", "APC", "APLE", "BL", "BLAS", "BLL", "BTD", "CALS", "CALSPA", "CALSS",
+    "CARCOMIX", "CAZ", "CC", "CF", "CGA", "CGATRASP", "COMBI", "CPP", "CSP", "CSSF",
+    "CTL", "CTV", "CTX", "DISTPONDNAV", "DJTR", "DTR", "DVL", "EVONIX", "EW", "FCPD",
+    "FCPFD", "FFBIOQ", "FLN", "FTR", "FUEGOX", "GAVL", "GENYA", "GESTFORMLAP", "GESTSW",
+    "GEVBLMJ", "GHIBLI", "ILK", "IMAGE", "IMPBLAUXSM", "IMPBLBELT", "IMPBLCAZZ", "IMPBLDTR",
+    "IMPBLFORM", "IMPBLKRSCSJ", "IMPBLMESC", "IMPBLRFFS", "IMPBLSTAS", "IMPBLSTASCM",
+    "IMPBLSTASSJ", "IMPLLFFBIOR", "IMPNAV", "IPMO", "JOT", "JOTLGS", "JOTRG", "KCP", "KFG",
+    "KFM", "KFT", "KG", "KGP", "KILNCHR", "KLGSM", "KM", "KMM", "KR", "KREOS", "KREOSJ",
+    "KREOSSJ", "LUXOR", "LVB", "MASTERGEVNC", "MD", "MFISD", "MSL", "MSLC", "MSLCSR", "MXW",
+    "NC", "NSC", "NTDISPF", "NTDISPFJ", "NTFIS", "NTL", "NTTIK", "P", "PGFA", "PGFS",
+    "PLOTTERCHR", "PRF", "PROP", "PSCSJ", "PSL", "RG", "ROBOEDGE", "ROYCORN", "ROYCUT",
+    "ROYINTEGREX", "ROYMIXSJ", "SAP", "SHARPWIREB", "SKYNET", "SMARTFLEXA", "SNC", "SNCDRILL",
+    "SNCFLEX", "SNCHURA", "SPEEDX", "ST", "STA", "STETA", "STPC", "TN", "TNCS", "TNFIS",
+    "TNFISLB", "TNFISP", "TNR", "TRAPIMPAA", "TRIMT", "TRINITY", "VIPER", "VVMB", "WM", "WME",
+    "WMEE", "WMF", "WMFE", "WMGE", "WMHE", "WMME", "WMR", "WMRE", "WP", "XATURN", "XBC",
+    "XBCT", "XBL", "XFCPD", "XNC", "XNTFIS", "XNTTIK", "XROYCUT", "XTNR", "XUSDF", "XXATURN",
+    "WM600", "WM800", "WM1000", "WM1300", "WM1500", "WP0300", "NC1200", "NC300", "NC400", "NC5",
+    "YADA",
+)
+
+NUMERIC_MAP_FILTER_FAMILIES: tuple[str, ...] = (
+    "NC1200", "NC300", "NC400", "NC5", "WP0300",
+    "WM600", "WM800", "WM1000", "WM1300", "WM1500",
+)
+
+MANUAL_MAP_FILTER_FAMILIES: tuple[str, ...] = ("EAGLE",)
+
+
+def available_map_filters(path: str | Path | None = None) -> list[str]:
+    """Return machine families found in a MAP workbook.
+
+    Numeric serials are removed from the visible choices, except for the meaningful NC300 family.
+    The editable GUI field still accepts one-off codes or any other prefix.
     """
-    return ["Tutti", "NC300", "GENYA", "TRINITY"]
+    defaults = [
+        "NC300", "GENYA", "TRINITY", "EVONIX",
+        *[
+            family for family in DISCOVERED_MAP_FILTER_FAMILIES
+            if re.fullmatch(r"[A-Z]+", family) or family in NUMERIC_MAP_FILTER_FAMILIES
+        ],
+        *NUMERIC_MAP_FILTER_FAMILIES,
+        *MANUAL_MAP_FILTER_FAMILIES,
+    ]
+    if path is None:
+        return ["Tutti", *sorted(set(defaults))]
+    try:
+        rows = _xlsx_rows_for_path(Path(path))
+        header_row_idx, _, code_idx, _ = _find_map_header_row(rows)
+        counts: dict[str, int] = {}
+        for row in rows[header_row_idx + 1:]:
+            family = _commercial_code_family(_row_value(row, code_idx))
+            if family:
+                counts[family] = counts.get(family, 0) + 1
+        families = sorted(
+            family for family in counts
+            if re.fullmatch(r"[A-Z]+", family) or family in NUMERIC_MAP_FILTER_FAMILIES
+        )
+        return ["Tutti", *sorted(set(defaults).union(families))]
+    except Exception:
+        return ["Tutti", *sorted(set(defaults))]
 
 
 def map_pool_size(filter_text: str = "") -> int:

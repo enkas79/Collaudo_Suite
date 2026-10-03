@@ -122,6 +122,9 @@ class ExcelAnalyzer:
 
     @staticmethod
     def _build_metadata(params: AnalysisParams, target_col_idx: int, date_col_idx: int, start_row_idx: int) -> dict[str, object]:
+        from .data_loader import _period_bounds
+
+        period_start, period_end = _period_bounds(params.period_months)
         return {
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "files_count": len(params.files),
@@ -131,6 +134,9 @@ class ExcelAnalyzer:
             "date_col": index_to_col(date_col_idx) if date_col_idx >= 0 else "N/D",
             "keyword": params.keyword.strip(),
             "keyword_threshold": params.keyword_threshold,
+            "period_months": params.period_months,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
             "threshold": params.threshold,
             "min_occurrences": params.min_occurrences,
             "algorithm": params.algorithm,

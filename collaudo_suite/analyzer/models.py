@@ -17,7 +17,8 @@ class AnalysisParams:
     analyze_all_sheets: bool = False
     stemming: bool = True
     algorithm: str = "combinato"  # fuzzy | jaccard | combinato
-    keyword_threshold: int = 90
+    keyword_threshold: int = 70
+    period_months: int = 12
     exhaustive_limit: int = 1800
     max_bucket_size: int = 900
 

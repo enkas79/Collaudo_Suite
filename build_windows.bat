@@ -1,14 +1,8 @@
 @echo off
 setlocal
-cd /d "%~dp0"
 
-if not exist .venv (
-    py -3 -m venv .venv
-)
-call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip
+rem Build locale dell'eseguibile onedir. L'installer NSIS viene creato separatamente.
 python -m pip install -r requirements.txt pyinstaller
-
 python -m PyInstaller --noconfirm --clean --windowed ^
   --name "CollaudoSuite" ^
   --collect-all matplotlib ^
@@ -19,13 +13,6 @@ python -m PyInstaller --noconfirm --clean --windowed ^
   --add-data "version.txt;." ^
   run_suite.py
 
-if errorlevel 1 (
-    echo.
-    echo Compilazione non riuscita.
-    pause
-    exit /b 1
-)
-
-echo.
-echo Eseguibile creato in: dist\CollaudoSuite\CollaudoSuite.exe
-pause
+if errorlevel 1 exit /b %errorlevel%
+echo Build completata in dist\CollaudoSuite
+endlocal

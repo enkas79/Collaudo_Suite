@@ -8,7 +8,7 @@ from pathlib import Path
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QStandardPaths, Signal
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QColor, QPalette, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..control_exchange import ExternalControl, export_controls_xlsx
+from ..control_exchange import ExternalControl
 from .exporters import export_report
 from .models import AnalysisParams, AnalysisReport
 from .worker import AnalysisWorker
@@ -106,7 +106,7 @@ class AnalyzerWindow(QMainWindow):
         search_grid.addWidget(QLabel("Soglia key"), 0, 0)
         search_grid.addWidget(QLabel("Soglia gruppi"), 0, 1)
         search_grid.addWidget(QLabel("Min. occ."), 0, 2)
-        self.spin_keyword_threshold = self._spinbox(1, 100, 90)
+        self.spin_keyword_threshold = self._spinbox(1, 100, 70)
         self.spin_thresh = self._spinbox(0, 100, 70)
         self.spin_occ = self._spinbox(1, 10000, 3)
         search_grid.addWidget(self.spin_keyword_threshold, 1, 0)
@@ -127,6 +127,18 @@ class AnalyzerWindow(QMainWindow):
         coord_grid.addWidget(self.txt_col, 1, 1)
         coord_grid.addWidget(self.txt_date, 1, 2)
         controls_layout.addLayout(coord_grid)
+
+        period_grid = QGridLayout()
+        period_grid.addWidget(QLabel("Anomalie negli ultimi"), 0, 0)
+        self.combo_period = QComboBox()
+        self.combo_period.addItem("1 mese", 1)
+        self.combo_period.addItem("3 mesi", 3)
+        self.combo_period.addItem("6 mesi", 6)
+        self.combo_period.addItem("1 anno", 12)
+        self.combo_period.setCurrentIndex(3)
+        self._style_combo_popup(self.combo_period)
+        period_grid.addWidget(self.combo_period, 1, 0)
+        controls_layout.addLayout(period_grid)
 
         sheet_grid = QGridLayout()
         sheet_grid.addWidget(QLabel("Foglio Excel"), 0, 0)
@@ -211,10 +223,7 @@ class AnalyzerWindow(QMainWindow):
 
         controls_tab = QWidget()
         controls_tab_layout = QVBoxLayout(controls_tab)
-        intro = QLabel(
-            "Verifica e modifica il testo operativo. Seleziona i controlli da trasferire direttamente alla Checklist "
-            "oppure esportali in un file Excel compatibile."
-        )
+        intro = QLabel("Verifica e modifica il testo operativo, poi trasferisci i controlli selezionati direttamente alla Checklist.")
         intro.setWordWrap(True)
         controls_tab_layout.addWidget(intro)
         self.controls_table = QTableWidget(0, 8)
@@ -237,16 +246,12 @@ class AnalyzerWindow(QMainWindow):
         select_all.clicked.connect(lambda: self._set_all_controls_checked(True))
         deselect_all = QPushButton("Deseleziona tutti")
         deselect_all.clicked.connect(lambda: self._set_all_controls_checked(False))
-        self.btn_export_controls = QPushButton("Esporta controlli Excel")
-        self.btn_export_controls.setEnabled(False)
-        self.btn_export_controls.clicked.connect(self.export_controls)
         self.btn_send_controls = QPushButton("Invia alla Checklist")
         self.btn_send_controls.setEnabled(False)
         self.btn_send_controls.clicked.connect(self.send_controls_to_checklist)
         buttons.addWidget(select_all)
         buttons.addWidget(deselect_all)
         buttons.addStretch(1)
-        buttons.addWidget(self.btn_export_controls)
         buttons.addWidget(self.btn_send_controls)
         controls_tab_layout.addLayout(buttons)
         self.tabs.addTab(controls_tab, "Controlli per Checklist")
@@ -300,6 +305,21 @@ class AnalyzerWindow(QMainWindow):
     def _toggle_sheet_field(self) -> None:
         self.txt_sheet.setEnabled(not self.chk_all_sheets.isChecked())
 
+    @staticmethod
+    def _style_combo_popup(combo: QComboBox) -> None:
+        """Keep popup text readable even when the dark sidebar stylesheet is active."""
+        view = combo.view()
+        palette = view.palette()
+        palette.setColor(QPalette.ColorRole.Base, QColor("#f4f4f4"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#202020"))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor("#34495e"))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+        view.setPalette(palette)
+        view.setStyleSheet(
+            "QAbstractItemView { background-color: #f4f4f4; color: #202020; "
+            "selection-background-color: #34495e; selection-color: #ffffff; }"
+        )
+
     def show_help(self) -> None:
         SuiteHelpDialog(self, initial_tab=1).exec()
 
@@ -317,6 +337,7 @@ class AnalyzerWindow(QMainWindow):
             files=self.selected_files,
             keyword=self.txt_key.text().strip(),
             keyword_threshold=self.spin_keyword_threshold.value(),
+            period_months=int(self.combo_period.currentData() or 12),
             threshold=self.spin_thresh.value(),
             min_occurrences=self.spin_occ.value(),
             start_cell=self.txt_start.text().strip().upper(),
@@ -337,7 +358,6 @@ class AnalyzerWindow(QMainWindow):
         self.btn_analyze.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_export.setEnabled(False)
-        self.btn_export_controls.setEnabled(False)
         self.btn_send_controls.setEnabled(False)
         self.analysis_report = None
         self.txt_out.clear()
@@ -389,7 +409,6 @@ class AnalyzerWindow(QMainWindow):
             self.tabs.setTabEnabled(1, True)
         self._populate_controls_table(report)
         if self.controls_table.rowCount():
-            self.btn_export_controls.setEnabled(True)
             self.btn_send_controls.setEnabled(True)
             self.tabs.setCurrentIndex(2)
 
@@ -518,22 +537,6 @@ class AnalyzerWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Errore export", str(exc))
 
-    def export_controls(self) -> None:
-        controls = self.selected_controls()
-        if not controls:
-            QMessageBox.warning(self, "Nessun controllo", "Seleziona almeno un controllo valido.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Esporta controlli per Checklist", str(self._downloads_dir() / "controlli_analyzer.xlsx"), "Excel (*.xlsx)"
-        )
-        if not path:
-            return
-        try:
-            target = export_controls_xlsx(controls, path)
-            QMessageBox.information(self, "Controlli esportati", f"File creato:\n{target}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Errore esportazione", str(exc))
-
     def send_controls_to_checklist(self) -> None:
         controls = self.selected_controls()
         if not controls:
@@ -565,6 +568,11 @@ class AnalyzerWindow(QMainWindow):
             #sidebar QLineEdit, #sidebar QSpinBox, #sidebar QComboBox {
                 min-height: 28px; padding: 3px 6px; border: 1px solid #60758a; border-radius: 4px;
                 background: #34495e; color: white;
+            }
+            #sidebar QComboBox QAbstractItemView {
+                background: #f4f4f4; color: #202020;
+                selection-background-color: #34495e; selection-color: white;
+                outline: none;
             }
             #sidebar QCheckBox { color: white; }
             #sidebar QPushButton { min-height: 31px; background: #405a73; color: white; border: 0; border-radius: 5px; }

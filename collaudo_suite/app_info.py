@@ -8,7 +8,7 @@ GITHUB_OWNER = "enkas79"
 GITHUB_REPO = "Collaudo_Suite"
 
 # Usato solo se version.txt non è raggiungibile da nessuna posizione nota.
-_FALLBACK_VERSION = "1.1.8"
+_FALLBACK_VERSION = "1.1.10"
 
 
 def _version_file_candidates() -> list[Path]:

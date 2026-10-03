@@ -17,6 +17,8 @@ from collaudo_suite.checklist.core import (
     load_map_items_for_filter,
     ticket_desc_sort_key,
     map_period_bounds,
+    _map_filter_matches,
+    _map_status_is_rejected,
 )
 from collaudo_suite.control_exchange import ExternalControl, export_controls_json, export_controls_xlsx, import_controls
 
@@ -254,6 +256,37 @@ class MapTemporalFilterTests(unittest.TestCase):
         start, end = map_period_bounds(date(2026, 3, 31), 1)
         self.assertEqual(start, date(2026, 2, 28))
         self.assertEqual(end, date(2026, 3, 31))
+
+    def test_commercial_code_filter_matches_inside_code(self):
+        self.assertTrue(_map_filter_matches("NC300-01", "Titolo", "1", "NC300"))
+        self.assertTrue(_map_filter_matches("GENYA_PRO", "Titolo", "2", "genya"))
+        self.assertTrue(_map_filter_matches("Trinity-ABC", "Titolo", "3", "TRINITY"))
+        self.assertTrue(_map_filter_matches("XNC300-01", "Titolo", "4", "NC300"))
+        self.assertFalse(_map_filter_matches("MODEL-XYZ", "NC300 nel titolo", "5", "NC300"))
+
+    def test_rejected_map_status_is_excluded(self):
+        self.assertTrue(_map_status_is_rejected("Rifiutato"))
+        self.assertTrue(_map_status_is_rejected("Rejected by customer"))
+        self.assertFalse(_map_status_is_rejected("Approvato"))
+        self.assertFalse(_map_status_is_rejected("Non rifiutato"))
+
+    def test_rejected_map_rows_do_not_enter_checklist_pool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "map_status.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Data"
+            sheet.append(["Commercial code", "Title", "Ticket Number", "Last Modify", "Status"])
+            sheet.append(["GENYA", "Da usare", "100", datetime(2026, 7, 1), "Approvato"])
+            sheet.append(["GENYA", "Da escludere", "101", datetime(2026, 7, 1), "Rifiutato"])
+            workbook.save(path)
+            items = load_map_items_for_filter(
+                path,
+                "GENYA",
+                reference_date=date(2026, 7, 24),
+                months_back=1,
+            )
+        self.assertEqual([item.ticket_number for item in items], ["100"])
 
 
     def test_recognized_date_column_without_valid_dates_is_error(self):
