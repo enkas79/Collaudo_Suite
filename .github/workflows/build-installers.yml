@@ -10,6 +10,10 @@ on:
     branches: [master]
     paths:
       - version.txt
+      - collaudo_suite/assets/app_icon.ico
+      - collaudo_suite/assets/app_icon.png
+      - packaging/windows/installer.nsi
+      - build_windows.bat
   workflow_dispatch: {}
 
 permissions:
