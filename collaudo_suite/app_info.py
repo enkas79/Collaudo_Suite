@@ -6,7 +6,7 @@ from pathlib import Path
 APP_TITLE = "Collaudo Suite"
 GITHUB_OWNER = "enkas79"
 GITHUB_REPO = "Collaudo_Suite"
-APP_AUTHOR = "Enkas79"
+APP_AUTHOR = "Enrico Martini"
 RELEASES_PAGE_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 
 # Usato solo se version.txt non è raggiungibile da nessuna posizione nota.
@@ -24,6 +24,11 @@ def _version_file_candidates() -> list[Path]:
     candidates.append(executable_dir / "version.txt")
     candidates.append(executable_dir / "_internal" / "version.txt")
     return candidates
+
+
+def app_icon_path() -> Path:
+    """Icona dell'applicazione (sorgente e build PyInstaller: asset nel package)."""
+    return Path(__file__).resolve().parent / "assets" / "app_icon.png"
 
 
 def get_app_version() -> str:

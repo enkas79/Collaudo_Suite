@@ -55,6 +55,20 @@ class SuiteGuiTests(unittest.TestCase):
         self.assertIn("Versione", text)
         self.assertIn("Autore", text)
 
+    def test_about_dialog_shows_author_name(self):
+        with mock.patch("collaudo_suite.main.QMessageBox.about") as about:
+            self.window.show_about()
+        self.assertIn("Enrico Martini", about.call_args.args[2])
+
+    def test_app_icon_is_bundled_and_valid(self):
+        from PySide6.QtGui import QIcon
+
+        from collaudo_suite.app_info import app_icon_path
+
+        self.assertTrue(app_icon_path().is_file())
+        self.assertTrue(app_icon_path().with_suffix(".ico").is_file())
+        self.assertFalse(QIcon(str(app_icon_path())).isNull())
+
     def test_guide_pdf_is_bundled_and_loads(self):
         self.assertTrue(guide_pdf_path().is_file())
         dialog = GuidePdfDialog(self.window)

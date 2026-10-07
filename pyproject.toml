@@ -20,6 +20,8 @@ dependencies = [
     "nltk>=3.8",
 ]
 
+authors = [{ name = "Enrico Martini" }]
+
 [project.optional-dependencies]
 dev = [
     "pyinstaller>=6.0",
@@ -46,5 +48,5 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-collaudo_suite = ["assets/*.pdf", "assets/*.png"]
+collaudo_suite = ["assets/*.pdf", "assets/*.png", "assets/*.ico"]
 "collaudo_suite.checklist.data" = ["*.xlsx", "schede/*.docx"]

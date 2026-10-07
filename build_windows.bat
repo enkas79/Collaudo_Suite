@@ -5,6 +5,7 @@ rem Build locale dell'eseguibile onedir. L'installer NSIS viene creato separatam
 python -m pip install -r requirements.txt pyinstaller
 python -m PyInstaller --noconfirm --clean --windowed ^
   --name "CollaudoSuite" ^
+  --icon "collaudo_suite\assets\app_icon.ico" ^
   --collect-all matplotlib ^
   --collect-all nltk ^
   --hidden-import PySide6.QtPrintSupport ^
@@ -13,6 +14,7 @@ python -m PyInstaller --noconfirm --clean --windowed ^
   --hidden-import collaudo_suite.checklist.data ^
   --add-data "collaudo_suite\checklist\data;collaudo_suite\checklist\data" ^
   --add-data "collaudo_suite\assets\Guida_operativa_Collaudo_Suite.pdf;collaudo_suite\assets" ^
+  --add-data "collaudo_suite\assets\app_icon.png;collaudo_suite\assets" ^
   --add-data "version.txt;." ^
   run_suite.py
 

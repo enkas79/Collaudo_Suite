@@ -4,6 +4,11 @@ Applicazione PySide6 che integra Analyzer anomalie, preparazione dei controlli e
 
 La versione corrente è indicata in `version.txt`, unica fonte usata da applicazione, `pyproject.toml` e workflow di build.
 
+## Modifiche della versione 1.3.1
+
+- nuova icona dell'applicazione (finestra, barra delle applicazioni, eseguibile e installer), generata da `tools/build_icon.py` in `collaudo_suite/assets/app_icon.png` / `app_icon.ico`;
+- autore indicato in *Aiuto > Informazioni*, nei metadati del pacchetto e nell'installer: **Enrico Martini**.
+
 ## Modifiche della versione 1.3.0
 
 - rimossa la checklist fissa interna (`Check list.docx`): la checklist è ora composta solo dalle segnalazioni MAP estratte e dai controlli importati dall'Analyzer; nei lavoro `.rcl.json` salvati con versioni precedenti le righe "Fisso" vengono ignorate all'apertura;

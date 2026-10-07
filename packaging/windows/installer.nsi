@@ -12,7 +12,7 @@
 !define APP_ID "CollaudoSuite"
 !define APP_NAME "Collaudo Suite"
 !define APP_EXE "CollaudoSuite.exe"
-!define APP_PUBLISHER "CollaudoTools"
+!define APP_PUBLISHER "Enrico Martini"
 !define DIST_DIR "..\..\dist\CollaudoSuite"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
 
@@ -25,6 +25,8 @@ InstallDirRegKey HKLM "Software\${APP_ID}" "InstallDir"
 RequestExecutionLevel admin
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "..\..\collaudo_suite\assets\app_icon.ico"
+!define MUI_UNICON "..\..\collaudo_suite\assets\app_icon.ico"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY

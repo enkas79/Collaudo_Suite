@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .analyzer.app import AnalyzerWindow
-from .app_info import APP_AUTHOR, APP_TITLE, RELEASES_PAGE_URL, get_app_version
+from .app_info import APP_AUTHOR, APP_TITLE, RELEASES_PAGE_URL, app_icon_path, get_app_version
 from .checklist.app import ChecklistWindow
 from .pdf_viewer import show_guide_pdf
 from .styles import HOME_QSS, SUITE_QSS
@@ -469,12 +469,26 @@ def exception_hook(exctype, value, tb) -> None:
         QMessageBox.critical(None, "Errore non gestito", f"{value}\n\nDettagli tecnici:\n{details}")
 
 
+def _set_windows_app_id() -> None:
+    """Su Windows fa usare alla barra delle applicazioni l'icona della suite invece di quella di Python."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CollaudoTools.CollaudoSuite")
+    except (AttributeError, OSError):
+        pass
+
+
 def main() -> int:
     sys.excepthook = exception_hook
+    _set_windows_app_id()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_TITLE)
     app.setOrganizationName("CollaudoTools")
     app.setStyle("Fusion")
+    app.setWindowIcon(QIcon(str(app_icon_path())))
     window = SuiteMainWindow()
     window.show()
     return app.exec()
