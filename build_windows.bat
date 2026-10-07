@@ -8,8 +8,11 @@ python -m PyInstaller --noconfirm --clean --windowed ^
   --collect-all matplotlib ^
   --collect-all nltk ^
   --hidden-import PySide6.QtPrintSupport ^
+  --hidden-import PySide6.QtPdf ^
+  --hidden-import PySide6.QtPdfWidgets ^
   --hidden-import collaudo_suite.checklist.data ^
   --add-data "collaudo_suite\checklist\data;collaudo_suite\checklist\data" ^
+  --add-data "collaudo_suite\assets\Guida_operativa_Collaudo_Suite.pdf;collaudo_suite\assets" ^
   --add-data "version.txt;." ^
   run_suite.py
 

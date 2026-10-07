@@ -46,4 +46,5 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"collaudo_suite.checklist.data" = ["*.docx", "*.xlsx", "schede/*.docx"]
+collaudo_suite = ["assets/*.pdf", "assets/*.png"]
+"collaudo_suite.checklist.data" = ["*.xlsx", "schede/*.docx"]

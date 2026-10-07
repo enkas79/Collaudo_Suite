@@ -77,6 +77,26 @@ QTabBar::tab:selected {{ background: white; font-weight: 700; border-bottom: 2px
 """
 
 CHECKLIST_TABLE_QSS = """
+#checklistSummary {
+    background: #ffffff;
+    color: #263746;
+    border: 1px solid #dfe5ea;
+    border-left: 4px solid #2878a8;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+#checklistPrimaryButton {
+    min-height: 38px;
+    background: #2878a8;
+    color: #ffffff;
+    border: none;
+    border-radius: 5px;
+    padding: 0 12px;
+    font-weight: 700;
+}
+#checklistPrimaryButton:hover { background: #3490c4; }
 QTableWidget {
     background-color: #ffffff;
     gridline-color: #d9d9d9;

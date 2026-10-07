@@ -11,9 +11,7 @@ from collaudo_suite.analyzer.models import AnalysisParams
 from collaudo_suite.analyzer.similarity import UnionFind, calculate_similarity
 from collaudo_suite.analyzer.text_utils import TextNormalizer
 from collaudo_suite.checklist.core import (
-    get_default_fixed_docx_path,
     get_default_map_xlsx_path,
-    load_default_fixed_items,
     load_map_items_for_filter,
     ticket_desc_sort_key,
     map_period_bounds,
@@ -113,10 +111,7 @@ class ExchangeTests(unittest.TestCase):
 
 
 class ChecklistResourcesTests(unittest.TestCase):
-    def test_bundled_resources_load(self):
-        self.assertTrue(get_default_fixed_docx_path().exists())
-        self.assertGreater(len(load_default_fixed_items()), 0)
-
+    def test_bundled_map_resource_loads(self):
         map_path = get_default_map_xlsx_path()
         if map_path.exists():
             self.assertGreater(len(load_map_items_for_filter(map_path, "")), 0)

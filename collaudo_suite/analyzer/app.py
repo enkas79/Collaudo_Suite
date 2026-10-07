@@ -43,7 +43,7 @@ from .models import AnalysisParams, AnalysisReport
 from .worker import AnalysisWorker
 
 
-from ..help_dialog import SuiteHelpDialog
+from ..pdf_viewer import show_guide_pdf
 from ..styles import ANALYZER_QSS, enable_styled_combo_popup
 class AnalyzerWindow(QMainWindow):
     controls_ready = Signal(object)
@@ -305,7 +305,7 @@ class AnalyzerWindow(QMainWindow):
         self.txt_sheet.setEnabled(not self.chk_all_sheets.isChecked())
 
     def show_help(self) -> None:
-        SuiteHelpDialog(self, initial_tab=1).exec()
+        show_guide_pdf(self)
 
     def select_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, "Apri Excel", "", "Excel (*.xlsx *.xlsm *.xls)")

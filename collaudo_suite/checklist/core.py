@@ -68,16 +68,11 @@ LOW_VALUE_FIELDS = {
     "collaudo", "note del collaudo", "wbs", "stato", "tipo", "titolo", "protocollo", "contratto",
 }
 
-VERNICIATURA_CHILDREN = {
-    "basamento", "trave", "canotto", "trasporti", "siliconatura",
-}
-
-
 @dataclass(frozen=True)
 class ChecklistItem:
     text: str
     source: str
-    kind: str  # "Fisso", "MAP" or "ANALYZER"
+    kind: str  # "MAP" or "ANALYZER"
     ticket_number: str = ""
     ticket_url: str = ""
 
@@ -86,7 +81,7 @@ class ChecklistItem:
 class ChecklistRecord:
     text: str
     source: str
-    kind: str  # "Fisso", "MAP" or "ANALYZER"
+    kind: str  # "MAP" or "ANALYZER"
     result: str = ""  # "Pass", "No pass" or ""
     note: str = ""
     ticket_number: str = ""
@@ -280,7 +275,6 @@ def extract_items_from_docx(path: str | Path, *, mode: str = "auto", source_labe
     """Extract checklist items from a DOCX.
 
     Modes:
-    - fixed: keeps almost every non-metadata line. Good for a dedicated fixed-checklist DOCX.
     - random: prefers numbered rows from collaudo tables; this avoids generic sector titles.
     - auto: same as random for structured tables, otherwise falls back to checkbox/actionable lines.
     """
@@ -293,8 +287,8 @@ def extract_items_from_docx(path: str | Path, *, mode: str = "auto", source_labe
     doc = Document(str(path))
     label = source_label or path.name
 
-    if mode not in {"auto", "fixed", "random"}:
-        raise ValueError("mode deve essere: auto, fixed o random")
+    if mode not in {"auto", "random"}:
+        raise ValueError("mode deve essere: auto o random")
 
     if mode in {"auto", "random"}:
         numbered = _extract_structured_table_controls(doc, label)
@@ -305,11 +299,7 @@ def extract_items_from_docx(path: str | Path, *, mode: str = "auto", source_labe
     cleaned_pairs = [(raw, clean_text(raw)) for raw in raw_lines]
     cleaned_pairs = [(raw, clean) for raw, clean in cleaned_pairs if not is_meta_line(clean)]
 
-    if mode == "fixed":
-        # Dedicated fixed-checklist files are intentionally short and may contain valid controls
-        # such as "Controllo ordine di vendita". Do not apply the sector-title filter here.
-        chosen = [clean for raw, clean in cleaned_pairs]
-    elif mode == "random":
+    if mode == "random":
         chosen = [clean for raw, clean in cleaned_pairs if _looks_actionable(clean, raw)]
     else:
         checkbox_items = [clean for raw, clean in cleaned_pairs if _has_checkbox(raw) and not is_probable_section_title(clean)]
@@ -363,11 +353,6 @@ def _resource_path(package: str, *parts: str) -> Path:
     if candidates:
         return candidates[0]
     return Path(*parts)
-
-
-def get_default_fixed_docx_path() -> Path:
-    """Return the bundled Word file used for the mandatory fixed checklist."""
-    return _resource_path("collaudo_suite.checklist.data", "Check list.docx")
 
 
 def get_default_map_xlsx_path() -> Path:
@@ -1024,90 +1009,6 @@ def sample_items_from_pool(
     return [ChecklistItem(i.text, i.source, kind, ticket_number=i.ticket_number, ticket_url=i.ticket_url) for i in picked], warnings
 
 
-def _normalize_fixed_groups(items: Sequence[ChecklistItem]) -> list[ChecklistItem]:
-    """Normalize the fixed checklist.
-
-    The source Word has a varnishing parent line followed by bare sub-items (Basamento, Trave,
-    Canotto, Trasporti, Siliconatura). Bare child rows are ambiguous in the final checklist, so the
-    parent context is merged into each sub-item and the non-checkable parent row is removed.
-    """
-    result: list[ChecklistItem] = []
-    i = 0
-    while i < len(items):
-        item = items[i]
-        text_key = item.text.casefold()
-        if "verniciatura" in text_key and "g001" in text_key:
-            parent = item.text
-            children: list[ChecklistItem] = []
-            j = i + 1
-            while j < len(items) and items[j].text.casefold().strip() in VERNICIATURA_CHILDREN:
-                children.append(items[j])
-                j += 1
-            if children:
-                for child in children:
-                    result.append(ChecklistItem(f"{parent} - {child.text}", item.source, item.kind))
-                i = j
-                continue
-        result.append(item)
-        i += 1
-    return result
-
-
-def load_default_fixed_items() -> list[ChecklistItem]:
-    """Load the mandatory checklist bundled with the application.
-
-    The user does not need to select this file in the GUI. To change the fixed list,
-    replace collaudo_suite/checklist/data/Check list.docx in the project/package.
-    """
-    path = get_default_fixed_docx_path()
-    items = extract_items_from_docx(path, mode="fixed", source_label="Check list interna")
-    normalized = _normalize_fixed_groups(items)
-    return [ChecklistItem(item.text, item.source, "Fisso") for item in normalized]
-
-
-def build_checklist(
-    fixed_items: Sequence[ChecklistItem],
-    random_pool: Sequence[ChecklistItem],
-    random_count: int,
-    *,
-    seed: int | None = None,
-    include_fixed_in_total: bool = False,
-) -> tuple[list[ChecklistItem], list[str]]:
-    """Return final checklist and warnings.
-
-    Fixed items are always included. If include_fixed_in_total=True, random_count is interpreted as
-    desired total count. When fixed items exceed it, fixed items still win and a warning is returned.
-    """
-    warnings: list[str] = []
-    fixed = [ChecklistItem(i.text, i.source, "Fisso") for i in fixed_items]
-
-    fixed_keys = {_norm_key(i.text) for i in fixed}
-    pool = [i for i in random_pool if _norm_key(i.text) not in fixed_keys]
-
-    if include_fixed_in_total:
-        desired_total = max(1, random_count)
-        if len(fixed) >= desired_total:
-            pick_count = 0
-            warnings.append(
-                f"I controlli fissi sono {len(fixed)}, quindi superano o eguagliano il totale richiesto ({desired_total}). Ho mantenuto tutti i fissi."
-            )
-        else:
-            pick_count = desired_total - len(fixed)
-    else:
-        pick_count = max(1, random_count)
-
-    if pick_count > len(pool):
-        warnings.append(
-            f"Richiesti {pick_count} controlli casuali, ma disponibili solo {len(pool)} controlli utili. Uso tutti quelli disponibili."
-        )
-        pick_count = len(pool)
-
-    rng = random.Random(seed)
-    picked = rng.sample(list(pool), pick_count) if pick_count else []
-    random_items = [ChecklistItem(i.text, i.source, "Random", ticket_number=i.ticket_number, ticket_url=i.ticket_url) for i in picked]
-    return fixed + random_items, warnings
-
-
 def records_from_items(items: Sequence[ChecklistItem]) -> list[ChecklistRecord]:
     return [ChecklistRecord(i.text, i.source, i.kind, ticket_number=i.ticket_number, ticket_url=i.ticket_url) for i in items]
 
@@ -1141,7 +1042,6 @@ def _header_value(header_info: Mapping[str, str] | None, key: str) -> str:
 
 def _kind_section_label(kind: str) -> str:
     labels = {
-        "Fisso": "CONTROLLI FISSI",
         "MAP": "SEGNALAZIONI MAP",
         "ANALYZER": "CONTROLLI IMPORTATI DA ANALYZER",
     }
@@ -1200,7 +1100,6 @@ def export_docx(
     *,
     title: str = "Check list di collaudo",
     source_random: str = "",
-    source_fixed: str = "Check list interna",
     header_info: Mapping[str, str] | None = None,
     seed: int | None = None,
 ) -> Path:
@@ -1245,9 +1144,6 @@ def export_docx(
     if source_random:
         meta.add_run(" | Sorgente random: ").bold = True
         meta.add_run(source_random)
-    if source_fixed:
-        meta.add_run(" | Checklist fissa: ").bold = True
-        meta.add_run(source_fixed)
     if seed is not None:
         meta.add_run(" | Seed casuale: ").bold = True
         meta.add_run(str(seed))
@@ -1343,7 +1239,6 @@ def export_pdf(
     *,
     title: str = "Check list di collaudo",
     source_random: str = "",
-    source_fixed: str = "Check list interna",
     header_info: Mapping[str, str] | None = None,
     seed: int | None = None,
 ) -> Path:
@@ -1434,8 +1329,6 @@ def export_pdf(
     meta_lines = [f"Generata il: {datetime.now().strftime('%d/%m/%Y %H:%M')}"]
     if source_random:
         meta_lines.append(f"Sorgente random: {source_random}")
-    if source_fixed:
-        meta_lines.append(f"Checklist fissa: {source_fixed}")
     if seed is not None:
         meta_lines.append(f"Seed casuale: {seed}")
     meta_lines.append("I controlli Pass / No pass sono quelli selezionati nel programma.")

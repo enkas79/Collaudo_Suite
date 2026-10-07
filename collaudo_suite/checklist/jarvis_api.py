@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
@@ -22,6 +24,7 @@ from .core import (
 JARVIS_BASE_URL = "https://jarvis.breton.it"
 TICKET_SEARCH_PATH = "/tickets/api/public/ticket/search?api-version=2"
 TICKET_DETAIL_PATH = "/tickets/api/public/ticket/detail?api-version=2"
+COMMERCIAL_CODE_FIELD = "propertydefinition_2674/matnr"
 
 
 def _as_dict(value: object) -> dict:
@@ -84,20 +87,27 @@ def _property_values(value: object) -> list[str]:
 
 
 def _ticket_codes(ticket: dict) -> list[str]:
+    # JARVIS OmniSearch exposes the commercial code under the same inner-field
+    # key used by the UI filter. Never fall back to arbitrary property values:
+    # those include opaque references such as DatasetElement_706033.
+    for prop in ticket.get("stringProperties", []) if isinstance(ticket.get("stringProperties"), list) else []:
+        if not isinstance(prop, dict) or str(prop.get("key", "")).casefold() != COMMERCIAL_CODE_FIELD.casefold():
+            continue
+        value = prop.get("value")
+        values = value if isinstance(value, list) else [value]
+        return [str(item).strip() for item in values if item not in (None, "")]
+
     properties = ticket.get("properties")
     if not isinstance(properties, dict):
         return []
     named_candidates: list[str] = []
-    fallback_candidates: list[str] = []
     for key, value in properties.items():
         key_text = str(key).casefold()
-        if any(term in key_text for term in ("commercial", "codice", "commessa", "machine", "macchina")):
+        if key_text == COMMERCIAL_CODE_FIELD.casefold() or any(
+            term in key_text for term in ("commercial", "codice commerciale", "commessa s codice")
+        ):
             named_candidates.extend(_property_values(value))
-        else:
-            # Some JARVIS installations expose custom-property IDs instead of
-            # human-readable names. Keep their values as a fallback candidate.
-            fallback_candidates.extend(_property_values(value))
-    return named_candidates or fallback_candidates
+    return named_candidates
 
 
 def _matches_commercial_code(codes: list[str], title: str, number: str, filter_text: str) -> bool:
@@ -127,6 +137,10 @@ def _excel_cell_value(value: object) -> object:
 
 def _ticket_number(ticket: dict) -> str:
     value = ticket.get("number", ticket.get("id", ""))
+    if isinstance(value, str):
+        match = re.fullmatch(r"Ticket_(\d+)", value.strip(), re.IGNORECASE)
+        if match:
+            value = match.group(1)
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value or "").strip()
@@ -144,42 +158,75 @@ def _fetch_ticket_rows(
     timeout: float,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[dict]:
-    """Fetch ticket search rows and enrich them with detail properties."""
+    """Fetch tickets using JARVIS' native Commercial code filter."""
     rows: list[dict] = []
     size = max(1, min(int(page_size), 500))
     for page in range(max(1, int(max_pages))):
         payload = {
-            "pageSize": size,
+            "chunkSize": size,
             "startIndex": page * size,
             "showArchived": False,
-            "sortField": "lastModifyDate",
-            "sortDescending": True,
+            "text": "",
+            "includeAllTerms": None,
+            "requestType": 0,
+            # Public API form of the commercial-code filter seen in the HAR.
+            # An empty contains value selects the field without restricting
+            # the download to one specific machine code.
+            "filters": [{
+                "field": COMMERCIAL_CODE_FIELD,
+                "dataType": 0,
+                "value": "",
+                "values": [],
+                "exactSearch": False,
+                "caseSensitiveSearch": False,
+            }],
         }
         response = _search_page(token, payload, timeout)
-        page_rows = response.get("data")
+        result = _as_dict(response.get("data"))
+        page_rows = result.get("items", response.get("items"))
         if not isinstance(page_rows, list) or not page_rows:
             break
-        total = response.get("total") if isinstance(response.get("total"), int) else 0
+        total_value = result.get("total", response.get("total"))
+        total = total_value if isinstance(total_value, int) else 0
         for raw in page_rows:
-            ticket = _as_dict(raw)
-            ticket_id = str(ticket.get("id") or "").strip()
-            if ticket_id:
-                detail = _request_json(
-                    JARVIS_BASE_URL + TICKET_DETAIL_PATH,
-                    token,
-                    {"ticketId": ticket_id},
-                    timeout,
-                ).get("data")
-                if isinstance(detail, dict):
-                    merged = dict(ticket)
-                    merged.update(detail)
-                    ticket = merged
+            raw_item = _as_dict(raw)
+            result_item = raw_item.get("item", raw_item)
+            ticket = dict(_as_dict(result_item))
+            ticket["id"] = _ticket_number({"id": ticket.get("id", "")})
+            ticket["number"] = ticket["id"]
+            ticket["properties"] = {
+                COMMERCIAL_CODE_FIELD: _ticket_codes(ticket),
+            }
+            # OmniSearch stores ticket fields in typed property arrays. Map the
+            # fields used by the MAP cache while preserving the exact code.
+            string_properties = ticket.get("stringProperties", [])
+            values_by_key = {
+                str(prop.get("key", "")).casefold(): prop.get("value", [])
+                for prop in string_properties
+                if isinstance(prop, dict)
+            } if isinstance(string_properties, list) else {}
+            def first_value(key: str, default: str = "") -> str:
+                value = values_by_key.get(key.casefold(), [])
+                if isinstance(value, list):
+                    value = value[0] if value else default
+                return str(value or default).strip()
+            ticket["model"] = first_value("ticketmodelname", "Segnalazione MAP")
+            ticket["title"] = str(ticket.get("title") or first_value("joip_title"))
+            ticket["businessLine"] = first_value("propertydefinition_1288/jarvisformfield_3168")
+            ticket["status"] = first_value("statuslabel")
+            ticket["createdAt"] = ticket.get("lastUpdated") or first_value("propertydefinition_2667/last_modify_date")
+            ticket["lastModifyDate"] = ticket["createdAt"]
+            ticket["assignee"] = first_value("assignedtoname")
+            ticket["createdBy"] = first_value("createdbyname")
+            ticket["lastModifyUser"] = first_value("lastchangeuser")
+            ticket["repliesNumber"] = first_value("replies_no")
+            ticket["attachmentsNumber"] = first_value("attacchments_no")
             rows.append(ticket)
             processed = len(rows)
             percent = int(processed * 100 / total) if total else 0
             if progress_callback:
                 progress_callback(min(99, percent), processed)
-        total = response.get("total")
+        total = result.get("total", response.get("total"))
         if len(page_rows) < size or (isinstance(total, int) and page * size + len(page_rows) >= total):
             break
     return rows
@@ -234,7 +281,8 @@ def sync_map_xlsx_from_jarvis(
             for row_number in range(2, old_sheet.max_row + 1):
                 values = [old_sheet.cell(row=row_number, column=column).value for column in range(1, len(headers) + 1)]
                 old_ticket = str(values[0] or "").strip()
-                if old_ticket:
+                old_code = str(values[5] or "").strip()
+                if old_ticket and old_code and not re.match(r"(?i)^(DatasetElement|UserDefinedValueListEntry)_\d+$", old_code):
                     old_link = old_sheet.cell(row=row_number, column=1).hyperlink
                     existing_rows[old_ticket] = (values, old_link.target if old_link else "")
         finally:
@@ -280,12 +328,36 @@ def sync_map_xlsx_from_jarvis(
             old_cell = sheet.cell(row=sheet.max_row, column=1)
             old_cell.hyperlink = old_link
             old_cell.style = "Hyperlink"
-    temporary = output.with_name(output.name + ".tmp")
-    workbook.save(temporary)
-    temporary.replace(output)
+    temporary_fd, temporary_name = tempfile.mkstemp(
+        prefix=f"{output.stem}_",
+        suffix=".tmp.xlsx",
+        dir=output.parent,
+    )
+    os.close(temporary_fd)
+    temporary = Path(temporary_name)
+    try:
+        workbook.save(temporary)
+        try:
+            os.replace(temporary, output)
+            saved_output = output
+        except PermissionError:
+            # Windows cannot replace a workbook while another process holds it
+            # open (often Excel or an antivirus scanner). Keep the old cache intact
+            # and install this complete generation under a fresh sibling filename.
+            suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+            saved_output = output.with_name(f"{output.stem}_{suffix}{output.suffix}")
+            sequence = 1
+            while saved_output.exists():
+                saved_output = output.with_name(f"{output.stem}_{suffix}_{sequence}{output.suffix}")
+                sequence += 1
+            os.replace(temporary, saved_output)
+    finally:
+        workbook.close()
+        if temporary.exists():
+            temporary.unlink()
     if progress_callback:
         progress_callback(100, len(rows))
-    return output
+    return saved_output
 
 
 def load_map_items_from_jarvis(

@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from .analyzer.app import AnalyzerWindow
 from .app_info import APP_AUTHOR, APP_TITLE, RELEASES_PAGE_URL, get_app_version
 from .checklist.app import ChecklistWindow
-from .help_dialog import SuiteHelpDialog
+from .pdf_viewer import show_guide_pdf
 from .styles import HOME_QSS, SUITE_QSS
 from .updater import (
     UpdateCheckWorker,
@@ -229,8 +229,8 @@ class SuiteMainWindow(QMainWindow):
         file_menu.addActions(self.command_toolbar.actions())
 
         tools_menu = menu_bar.addMenu("&Strumenti")
-        fixed_info_action = QAction("Info file interni", self)
-        fixed_info_action.triggered.connect(self.checklist.show_fixed_info)
+        fixed_info_action = QAction("Info file MAP", self)
+        fixed_info_action.triggered.connect(self.checklist.show_internal_info)
         tools_menu.addAction(fixed_info_action)
 
         help_menu = menu_bar.addMenu("&Aiuto")
@@ -249,7 +249,7 @@ class SuiteMainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def show_guide(self) -> None:
-        SuiteHelpDialog(self).exec()
+        show_guide_pdf(self)
 
     def show_about(self) -> None:
         # Versione riletta a ogni apertura: riflette sempre il contenuto di version.txt.

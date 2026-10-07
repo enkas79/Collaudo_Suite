@@ -14,6 +14,7 @@ except ImportError:  # PySide6 (o le librerie grafiche di sistema) non disponibi
 
 if QApplication is not None:
     from collaudo_suite.main import SuiteMainWindow
+    from collaudo_suite.pdf_viewer import GuidePdfDialog, guide_pdf_path
 
 
 @unittest.skipIf(QApplication is None, "PySide6 non disponibile")
@@ -53,6 +54,12 @@ class SuiteGuiTests(unittest.TestCase):
         text = about.call_args.args[2]
         self.assertIn("Versione", text)
         self.assertIn("Autore", text)
+
+    def test_guide_pdf_is_bundled_and_loads(self):
+        self.assertTrue(guide_pdf_path().is_file())
+        dialog = GuidePdfDialog(self.window)
+        self.addCleanup(dialog.deleteLater)
+        self.assertGreater(dialog.document.pageCount(), 0)
 
     def test_sidebar_combo_popups_use_styled_delegate(self):
         # Regressione: con il delegate "menu" di Fusion le opzioni erano bianche su fondo chiaro.

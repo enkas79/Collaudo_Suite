@@ -40,9 +40,7 @@ from .core import (
     ChecklistItem,
     ChecklistRecord,
     export_pdf,
-    get_default_fixed_docx_path,
     get_default_map_xlsx_path,
-    load_default_fixed_items,
     load_map_items_for_filter,
     available_map_filters,
     sample_items_from_pool,
@@ -51,14 +49,13 @@ from .core import (
 )
 from .jarvis_api import sync_map_xlsx_from_jarvis
 
-from ..help_dialog import SuiteHelpDialog
+from ..pdf_viewer import show_guide_pdf
 from ..app_info import get_app_version
 from ..control_exchange import ExternalControl, import_controls
 from ..styles import CHECKLIST_TABLE_QSS
 
 APP_NAME = "Collaudo Suite - Checklist"
 ORG_NAME = "CollaudoTools"
-FIXED_SOURCE_LABEL = "Check list interna"
 PROJECT_VERSION = get_app_version()
 
 COL_N = 0
@@ -136,7 +133,6 @@ class PdfExportWorker(QObject):
                 self.records,
                 self.output_path,
                 source_random="",
-                source_fixed=FIXED_SOURCE_LABEL,
                 header_info=self.header_info,
                 seed=None,
             )
@@ -151,7 +147,6 @@ class ChecklistWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1280, 780)
         self.settings = QSettings(ORG_NAME, APP_NAME)
-        self.fixed_items: list[ChecklistItem] = []
         self.map_pool: list[ChecklistItem] = []
         self.external_items: list[ChecklistItem] = []
         self.current_items: list[ChecklistItem] = []
@@ -169,7 +164,6 @@ class ChecklistWindow(QMainWindow):
 
         self._build_ui()
         self._load_settings()
-        self._load_fixed_items()
         QTimer.singleShot(1200, self._auto_sync_jarvis_cache)
 
     def _build_ui(self) -> None:
@@ -277,23 +271,27 @@ class ChecklistWindow(QMainWindow):
         map_layout.addWidget(QLabel("Sorgente MAP:"))
         map_layout.addWidget(self.map_source_combo)
 
+        self.jarvis_controls = QWidget()
+        jarvis_controls_layout = QVBoxLayout(self.jarvis_controls)
+        jarvis_controls_layout.setContentsMargins(0, 0, 0, 0)
         self.jarvis_token_edit = QLineEdit()
         self.jarvis_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.jarvis_token_edit.setPlaceholderText("Token con permesso ticket.read")
         self.jarvis_token_edit.setToolTip("Il token viene salvato solo nelle impostazioni locali dell'utente.")
-        map_layout.addWidget(QLabel("Token JARVIS:"))
-        map_layout.addWidget(self.jarvis_token_edit)
+        jarvis_controls_layout.addWidget(QLabel("Token JARVIS:"))
+        jarvis_controls_layout.addWidget(self.jarvis_token_edit)
 
         self.jarvis_sync_btn = QPushButton("Aggiorna MAP da JARVIS")
         self.jarvis_sync_btn.clicked.connect(self.sync_jarvis_map)
-        map_layout.addWidget(self.jarvis_sync_btn)
+        jarvis_controls_layout.addWidget(self.jarvis_sync_btn)
 
         self.jarvis_progress = QProgressBar()
         self.jarvis_progress.setRange(0, 100)
         self.jarvis_progress.setValue(0)
         self.jarvis_progress.setFormat("Sincronizzazione JARVIS: %p%")
         self.jarvis_progress.setVisible(False)
-        map_layout.addWidget(self.jarvis_progress)
+        jarvis_controls_layout.addWidget(self.jarvis_progress)
+        map_layout.addWidget(self.jarvis_controls)
 
         self.map_file_edit = QLineEdit()
         self.map_file_edit.setReadOnly(True)
@@ -303,10 +301,15 @@ class ChecklistWindow(QMainWindow):
         browse_map_btn = QPushButton("Sfoglia...")
         browse_map_btn.clicked.connect(self.browse_map_file)
         map_file_row.addWidget(browse_map_btn)
-        map_layout.addWidget(QLabel("File MAP riepilogativo:"))
-        map_layout.addLayout(map_file_row)
+        self.excel_controls = QWidget()
+        excel_controls_layout = QVBoxLayout(self.excel_controls)
+        excel_controls_layout.setContentsMargins(0, 0, 0, 0)
+        excel_controls_layout.addWidget(QLabel("File MAP riepilogativo:"))
+        excel_controls_layout.addLayout(map_file_row)
+        map_layout.addWidget(self.excel_controls)
 
         self.preview_btn = QPushButton("Estrai / Aggiorna anteprima")
+        self.preview_btn.setObjectName("checklistPrimaryButton")
         self.preview_btn.clicked.connect(self.refresh_preview)
         map_layout.addWidget(self.preview_btn)
         map_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
@@ -339,13 +342,8 @@ class ChecklistWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(6)
 
-        self.summary_label = QLabel(
-            "Compila l'intestazione, scegli quante segnalazioni MAP random aggiungere e genera l'anteprima. "
-            "Il filtro MAP lavora sul Commercial code; usa Tutti per pescare da tutto il file. "
-            "Il periodo MAP e calcolato a ritroso dalla data di collaudo selezionata. "
-            "Le righe MAP includono anche il numero Ticket quando presente. "
-            "I comandi di salvataggio, apertura, PDF e uscita sono disponibili come icone nella barra superiore."
-        )
+        self.summary_label = QLabel("Nessuna anteprima generata. Completa i dati e seleziona «Estrai / Aggiorna anteprima».")
+        self.summary_label.setObjectName("checklistSummary")
         self.summary_label.setWordWrap(True)
         right_layout.addWidget(self.summary_label)
 
@@ -394,6 +392,8 @@ class ChecklistWindow(QMainWindow):
 
     def _update_map_source_ui(self) -> None:
         is_jarvis = self.map_source_combo.currentData() == "jarvis"
+        self.jarvis_controls.setVisible(is_jarvis)
+        self.excel_controls.setVisible(not is_jarvis)
         self.jarvis_token_edit.setEnabled(is_jarvis)
         self.jarvis_sync_btn.setEnabled(is_jarvis)
         self.map_file_edit.setEnabled(not is_jarvis)
@@ -455,12 +455,6 @@ class ChecklistWindow(QMainWindow):
             "numero_commessa": self.order_number_edit.text().strip(),
         }
 
-    def _load_fixed_items(self) -> None:
-        try:
-            self.fixed_items = load_default_fixed_items()
-        except Exception as exc:
-            QMessageBox.critical(self, "Errore checklist fissa", str(exc))
-
     def _selected_map_filter(self) -> str:
         text = self.map_filter_combo.currentText().strip()
         if not text or text.casefold() == "tutti":
@@ -492,6 +486,9 @@ class ChecklistWindow(QMainWindow):
         return str(self.map_source_combo.currentData() or "excel")
 
     def _jarvis_cache_path(self) -> Path:
+        configured_path = str(self.settings.value("jarvis_cache_path", "")).strip()
+        if configured_path and Path(configured_path).exists():
+            return Path(configured_path)
         base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         root = Path(base) if base else Path.home() / ".collaudo_suite"
         return root / "map_cache_jarvis.xlsx"
@@ -541,6 +538,7 @@ class ChecklistWindow(QMainWindow):
         self.jarvis_progress.setValue(100)
         self.jarvis_progress.setFormat("Cache MAP aggiornata (%p%)")
         self.map_file_edit.setText(path)
+        self.settings.setValue("jarvis_cache_path", path)
         self._save_settings()
         self._refresh_map_filter_options(Path(path))
         if not self._jarvis_sync_silent:
@@ -698,12 +696,7 @@ class ChecklistWindow(QMainWindow):
     def refresh_preview(self, *, _loaded_map_pool: list[ChecklistItem] | None = None) -> None:
         try:
             self._save_settings()
-            if not self.fixed_items:
-                self._load_fixed_items()
-            if not self.fixed_items:
-                raise RuntimeError("La checklist fissa interna non è disponibile.")
-
-            base_items = [ChecklistItem(item.text, item.source, "Fisso", ticket_url=item.ticket_url) for item in self.fixed_items]
+            base_items: list[ChecklistItem] = []
             warnings: list[str] = []
 
             map_filter = self._selected_map_filter()
@@ -750,22 +743,19 @@ class ChecklistWindow(QMainWindow):
             external_items = [item for item in self.external_items if self._control_key(item.text) not in used_keys]
             old_records = self._collect_records() if self.current_items else []
             map_records = self._records_with_saved_state(map_items, old_records)
-            fixed_records = self._records_with_saved_state(base_items, old_records)
             analyzer_records = self._records_with_saved_state(external_items, old_records)
-            all_records = fixed_records + map_records + analyzer_records
+            all_records = map_records + analyzer_records
             self.current_project_path = None
             if self.current_items:
-                self._replace_table_section("MAP", map_records, fixed_records + analyzer_records)
-                self._replace_table_section("Fisso", fixed_records, map_records + analyzer_records)
-                self._replace_table_section("ANALYZER", analyzer_records, fixed_records + map_records)
+                self._replace_table_section("MAP", map_records, analyzer_records)
+                self._replace_table_section("ANALYZER", analyzer_records, map_records)
             else:
                 self._apply_records_to_table(all_records)
 
-            fixed_count = sum(1 for item in self.current_items if item.kind == "Fisso")
             map_count = sum(1 for item in self.current_items if item.kind == "MAP")
             analyzer_count = sum(1 for item in self.current_items if item.kind == "ANALYZER")
             msg = (
-                f"Anteprima: {fixed_count} controlli fissi + {map_count} segnalazioni MAP random + "
+                f"Anteprima: {map_count} segnalazioni MAP random + "
                 f"{analyzer_count} controlli Analyzer = {len(self.current_items)} controlli totali. "
                 f"Pool MAP Commercial code '{map_filter or 'Tutti'}': {len(self.map_pool)}. "
                 f"Periodo: {self._map_period_label()} fino al {self.date_edit.date().toString('dd/MM/yyyy')}. "
@@ -817,8 +807,6 @@ class ChecklistWindow(QMainWindow):
         return item
 
     def _row_background_for_kind(self, kind: str) -> QColor:
-        if kind == "Fisso":
-            return QColor("#f8f8f8")
         if kind == "MAP":
             return QColor("#fff8ed")
         if kind == "ANALYZER":
@@ -868,7 +856,6 @@ class ChecklistWindow(QMainWindow):
 
     def _section_title(self, kind: str) -> str:
         return {
-            "Fisso": "CONTROLLI FISSI",
             "MAP": "SEGNALAZIONI MAP",
             "ANALYZER": "CONTROLLI IMPORTATI DA ANALYZER",
         }.get(kind, kind)
@@ -887,7 +874,7 @@ class ChecklistWindow(QMainWindow):
         while end < self.table.rowCount():
             item = self.table.item(end, COL_N)
             if item is not None and item.text().split(" (")[0] in {
-                "CONTROLLI FISSI", "SEGNALAZIONI MAP", "CONTROLLI IMPORTATI DA ANALYZER"
+                "SEGNALAZIONI MAP", "CONTROLLI IMPORTATI DA ANALYZER"
             }:
                 break
             end += 1
@@ -925,7 +912,7 @@ class ChecklistWindow(QMainWindow):
         for row in range(self.table.rowCount()):
             section = self.table.item(row, COL_N)
             if section is not None and section.text().split(" (")[0] in {
-                "CONTROLLI FISSI", "SEGNALAZIONI MAP", "CONTROLLI IMPORTATI DA ANALYZER"
+                "SEGNALAZIONI MAP", "CONTROLLI IMPORTATI DA ANALYZER"
             }:
                 self.table_row_to_item_index.append(None)
                 continue
@@ -962,7 +949,7 @@ class ChecklistWindow(QMainWindow):
                 self.table.blockSignals(False)
                 return
             insert_at = self.table.rowCount()
-            group_order = ("Fisso", "MAP", "ANALYZER")
+            group_order = ("MAP", "ANALYZER")
             kind_position = group_order.index(kind)
             for candidate_kind in group_order[kind_position + 1:]:
                 found = self._section_rows(candidate_kind)
@@ -992,6 +979,7 @@ class ChecklistWindow(QMainWindow):
         self.table.blockSignals(False)
         self.table.resizeRowsToContents()
         self._fit_table_columns()
+        self._update_checklist_summary()
 
     def _populate_table(self, items: list[ChecklistItem]) -> None:
         self.table.blockSignals(True)
@@ -999,7 +987,6 @@ class ChecklistWindow(QMainWindow):
         self.table_row_to_item_index = []
 
         groups = [
-            ("Fisso", "CONTROLLI FISSI"),
             ("MAP", "SEGNALAZIONI MAP"),
             ("ANALYZER", "CONTROLLI IMPORTATI DA ANALYZER"),
         ]
@@ -1049,6 +1036,7 @@ class ChecklistWindow(QMainWindow):
         self.table.blockSignals(False)
         self.table.resizeRowsToContents()
         self._fit_table_columns()
+        self._update_checklist_summary()
 
     def _apply_records_to_table(self, records: list[ChecklistRecord]) -> None:
         self.current_items = [ChecklistItem(record.text, record.source, record.kind, ticket_number=record.ticket_number, ticket_url=record.ticket_url) for record in records]
@@ -1070,6 +1058,7 @@ class ChecklistWindow(QMainWindow):
         self.table.blockSignals(False)
         self.table.resizeRowsToContents()
         self._fit_table_columns()
+        self._update_checklist_summary()
 
     def _fit_table_columns(self) -> None:
         if not hasattr(self, "table"):
@@ -1083,7 +1072,7 @@ class ChecklistWindow(QMainWindow):
         self.table.setColumnWidth(COL_PASS, max(58, min(70, self.table.columnWidth(COL_PASS) + 8)))
         self.table.setColumnWidth(COL_NOPASS, max(76, min(92, self.table.columnWidth(COL_NOPASS) + 8)))
 
-        fixed_width = (
+        static_width = (
             self.table.columnWidth(COL_N)
             + self.table.columnWidth(COL_KIND)
             + self.table.columnWidth(COL_TICKET)
@@ -1091,7 +1080,7 @@ class ChecklistWindow(QMainWindow):
             + self.table.columnWidth(COL_NOPASS)
             + 30
         )
-        available = max(520, viewport_width - fixed_width)
+        available = max(520, viewport_width - static_width)
         note_content_width = self.table.columnWidth(COL_NOTE)
         note_width = max(170, min(340, note_content_width + 28, int(available * 0.32)))
         control_width = max(390, available - note_width)
@@ -1140,6 +1129,17 @@ class ChecklistWindow(QMainWindow):
             return
         cell.setData(Qt.UserRole, checked)
         cell.setText("X" if checked else "")
+        if checked and column == COL_PASS:
+            cell.setBackground(QColor("#d9f2e3"))
+            cell.setForeground(QColor("#176b3a"))
+        elif checked and column == COL_NOPASS:
+            cell.setBackground(QColor("#fde2e0"))
+            cell.setForeground(QColor("#a12622"))
+        else:
+            kind = self.table.item(row, COL_KIND)
+            background = self._row_background_for_kind(kind.text()) if kind else QColor("#ffffff")
+            cell.setBackground(background)
+            cell.setForeground(QColor("#111111"))
 
     def _is_result_cell_checked(self, row: int, column: int) -> bool:
         cell = self.table.item(row, column)
@@ -1165,8 +1165,41 @@ class ChecklistWindow(QMainWindow):
         if not currently_checked:
             self._set_result_cell(row, other_col, False)
         self.table.blockSignals(False)
+        self._update_checklist_summary()
+
+    def _update_checklist_summary(self) -> None:
+        totals = {"MAP": 0, "ANALYZER": 0}
+        passed = failed = 0
+        for row in range(self.table.rowCount()):
+            kind_cell = self.table.item(row, COL_KIND)
+            if kind_cell is None:
+                continue
+            kind = kind_cell.text()
+            totals[kind] = totals.get(kind, 0) + 1
+            passed += int(self._is_result_cell_checked(row, COL_PASS))
+            failed += int(self._is_result_cell_checked(row, COL_NOPASS))
+        total = sum(totals.values())
+        pending = total - passed - failed
+        if not total:
+            self.summary_label.setText("Nessuna anteprima generata. Completa i dati e seleziona «Estrai / Aggiorna anteprima».")
+            return
+        self.summary_label.setText(
+            f"{total} controlli  ·  {totals['MAP']} MAP  ·  "
+            f"{totals['ANALYZER']} Analyzer  ·  "
+            f"{passed} Pass  ·  {failed} No pass  ·  {pending} da verificare"
+        )
 
     def _ticket_url_for_row(self, row: int) -> str:
+        # The link belongs to the visible cell, not to the row's position in
+        # current_items: section refreshes can reorder/rebuild rows independently.
+        ticket_cell = self.table.item(row, COL_TICKET) if row >= 0 else None
+        if ticket_cell is not None:
+            cell_url = str(ticket_cell.data(Qt.UserRole + 1) or "").strip()
+            if cell_url:
+                return cell_url
+            cell_number = ticket_cell.text().strip()
+            if cell_number:
+                return build_ticket_url(cell_number)
         if row < 0 or row >= len(self.table_row_to_item_index):
             return ""
         item_index = self.table_row_to_item_index[row]
@@ -1480,7 +1513,9 @@ class ChecklistWindow(QMainWindow):
                 text = str(raw.get("text", "")).strip()
                 if not text:
                     continue
-                kind = str(raw.get("kind", "Fisso")).strip() or "Fisso"
+                kind = str(raw.get("kind", "MAP")).strip() or "MAP"
+                if kind not in {"MAP", "ANALYZER"}:
+                    continue
                 source_label = str(raw.get("source", ""))
                 ticket_number = str(raw.get("ticket_number", raw.get("ticket", "")))
                 ticket_url = str(raw.get("ticket_url", ""))
@@ -1505,37 +1540,30 @@ class ChecklistWindow(QMainWindow):
             self._save_settings()
             self.current_project_path = source
             self._apply_records_to_table(records)
-            fixed_count = sum(1 for r in records if r.kind == "Fisso")
             map_count = sum(1 for r in records if r.kind == "MAP")
             analyzer_count = sum(1 for r in records if r.kind == "ANALYZER")
             self.summary_label.setText(
-                f"Lavoro caricato: {fixed_count} controlli fissi + {map_count} segnalazioni MAP random + "
+                f"Lavoro caricato: {map_count} segnalazioni MAP random + "
                 f"{analyzer_count} controlli Analyzer = {len(records)} controlli totali. File: {source}"
             )
         except Exception as exc:
             QMessageBox.critical(self, "Errore apertura lavoro", str(exc))
 
-    def show_fixed_info(self) -> None:
+    def show_internal_info(self) -> None:
         try:
-            fixed_path = get_default_fixed_docx_path()
             map_path = self._selected_map_path()
             text = (
-                f"Checklist fissa interna caricata: {len(self.fixed_items)} controlli.\n\n"
-                f"File checklist fissa:\n{fixed_path}\n\n"
                 f"File segnalazioni MAP in uso:\n{map_path}\n\n"
-                "Le schede collaudo random sono state rimosse: il programma usa la checklist fissa e, se richieste, "
-                "le segnalazioni MAP filtrate sul Commercial code e sul periodo scelti in GUI, poi estratte casualmente. "
+                "Le segnalazioni MAP sono filtrate sul Commercial code e sul periodo scelti in GUI, poi estratte casualmente. "
                 "Con filtro 'Tutti' pesca da tutte le righe MAP con Title/Titolo valido. "
                 "Il numero presente nella colonna Ticket/Numero Ticket viene importato e mostrato nella colonna Ticket.\n\n"
-                "Nota Verniciatura: la riga generale G001 non viene usata come controllo autonomo; "
-                "viene espansa sui sottocontrolli Basamento, Trave, Canotto, Trasporti e Siliconatura."
             )
         except Exception:
             text = "File interni non disponibili."
         QMessageBox.information(self, "Info file interni", text)
 
     def show_help(self) -> None:
-        SuiteHelpDialog(self, initial_tab=3).exec()
+        show_guide_pdf(self)
 
 
 

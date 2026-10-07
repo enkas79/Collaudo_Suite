@@ -4,6 +4,14 @@ Applicazione PySide6 che integra Analyzer anomalie, preparazione dei controlli e
 
 La versione corrente è indicata in `version.txt`, unica fonte usata da applicazione, `pyproject.toml` e workflow di build.
 
+## Modifiche della versione 1.3.0
+
+- rimossa la checklist fissa interna (`Check list.docx`): la checklist è ora composta solo dalle segnalazioni MAP estratte e dai controlli importati dall'Analyzer; nei lavoro `.rcl.json` salvati con versioni precedenti le righe "Fisso" vengono ignorate all'apertura;
+- la **Guida** apre un manuale PDF integrato (`collaudo_suite/assets/Guida_operativa_Collaudo_Suite.pdf`) con scorrimento e zoom; il PDF si rigenera da `collaudo_suite/help_dialog.py` con `python tools/build_help_pdf.py`;
+- JARVIS: il codice commerciale viene letto dal campo nativo OmniSearch `propertydefinition_2674/matnr` e la ricerca usa il filtro Commercial code dell'API; scartati i riferimenti opachi (`DatasetElement_…`) come codici; se la cache Excel è aperta in un altro programma, viene salvata con un nuovo nome invece di fallire;
+- Checklist: sezioni JARVIS ed Excel mostrate solo per la sorgente selezionata, riepilogo con conteggi Pass / No pass / da verificare, celle esito colorate, link ticket ricavato dalla cella visibile;
+- menu *Strumenti*: la voce diventa **Info file MAP**.
+
 ## Modifiche della versione 1.2.0
 
 - corretto il popup delle tendine nella barra laterale dell'Analyzer (*Anomalie negli ultimi*, algoritmo di analisi): le opzioni erano bianche su fondo chiaro e quindi illeggibili; ora il popup usa la palette scura della barra laterale;
