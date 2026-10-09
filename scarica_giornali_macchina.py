@@ -499,7 +499,7 @@ def download_documents(
     print(f"[START] Sorgente: JARVIS Assets | WBS={wbs.strip() or 'tutti'} | organizzazione per macchina={'sì' if organize_by_machine else 'no'}")
     page_size = max(1, min(int(page_size), 100))
     assets = _iter_assets(
-        token, page_size=page_size, max_pages=max_pages, wbs=wbs.strip(), exact=True,
+        token, page_size=page_size, max_pages=max_pages, wbs=wbs.strip(), exact=bool(wbs.strip()),
         auth_cookie=auth_cookie, stop_event=stop_event, seen=set(),
     )
     for asset in assets:
