@@ -183,6 +183,18 @@ def _asset_string_property(asset: dict[str, Any], key: str) -> str:
     return ""
 
 
+def _wbs_filter(value: str, exact: bool, variant: int) -> dict[str, Any]:
+    """Filtro WBS: esatto, oppure "contiene" in più forme (il server rifiuta quelle non valide)."""
+    if exact:
+        return {"field": "wbs", "dataType": 0, "values": [value], "exactSearch": True}
+    forms = (
+        {"values": [value]},
+        {"value": value, "values": [], "caseSensitiveSearch": False},
+        {"value": value, "values": [value], "caseSensitiveSearch": False},
+    )
+    return {"field": "wbs", "dataType": 0, "exactSearch": False, **forms[variant]}
+
+
 def _search_assets(
     token: str,
     *,
@@ -191,10 +203,11 @@ def _search_assets(
     wbs: str = "",
     auth_cookie: str = "",
     exact: bool = True,
+    variant: int = 0,
 ) -> dict[str, Any]:
     filters = []
     if wbs.strip():
-        filters.append({"field": "wbs", "dataType": 0, "values": [wbs.strip()], "exactSearch": exact})
+        filters.append(_wbs_filter(wbs.strip(), exact, variant))
     payload = {
         "domainContext": "Assets",
         "query": {
@@ -422,6 +435,27 @@ def _write_file(folder: Path, suggested_name: str, content: bytes, disposition: 
     return target
 
 
+_contains_variant = 0  # forma del filtro "contiene" accettata dal server
+
+
+def _search_assets_contains(token: str, *, exact: bool, **kwargs: Any) -> dict[str, Any]:
+    """Come _search_assets, ma prova le varianti del filtro "contiene" se il server le rifiuta."""
+    global _contains_variant
+    if exact or not str(kwargs.get("wbs") or "").strip():
+        return _search_assets(token, exact=exact, **kwargs)
+    last_error: RuntimeError | None = None
+    for variant in range(_contains_variant, 3):
+        try:
+            response = _search_assets(token, exact=False, variant=variant, **kwargs)
+        except RuntimeError as exc:
+            last_error = exc
+            print(f"[INFO] Filtro WBS 'contiene' variante {variant} rifiutato: {exc}")
+            continue
+        _contains_variant = variant
+        return response
+    raise RuntimeError(f"Il server rifiuta il filtro WBS 'contiene': {last_error}")
+
+
 def _load_completed(path: Path) -> set[str]:
     try:
         return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
@@ -461,7 +495,7 @@ def _iter_assets(
             break
         # startIndex + chunkSize non deve superare index.max_result_window.
         chunk_size = min(page_size, ASSET_RESULT_WINDOW - start_index)
-        response = _search_assets(
+        response = _search_assets_contains(
             token, start_index=start_index, chunk_size=chunk_size,
             wbs=wbs, auth_cookie=auth_cookie, exact=exact,
         )
@@ -489,10 +523,14 @@ def _iter_assets(
     for char in WBS_SPLIT_ALPHABET:
         if stop_event is not None and stop_event.is_set():
             return
-        yield from _iter_assets(
-            token, page_size=page_size, max_pages=max_pages, wbs=wbs + char, exact=False,
-            auth_cookie=auth_cookie, stop_event=stop_event, seen=seen, depth=depth + 1,
-        )
+        try:
+            yield from _iter_assets(
+                token, page_size=page_size, max_pages=max_pages, wbs=wbs + char, exact=False,
+                auth_cookie=auth_cookie, stop_event=stop_event, seen=seen, depth=depth + 1,
+            )
+        except RuntimeError as exc:
+            print(f"[WARN] Suddivisione per WBS interrotta: {exc}", file=sys.stderr)
+            return
 
 
 def download_documents(
