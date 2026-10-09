@@ -106,25 +106,3 @@ Eseguire `build_windows.bat`. Il risultato viene creato in `dist\CollaudoSuite\C
 ## Build e release automatiche (CI)
 
 Il workflow `.github/workflows/build-installers.yml` si attiva a ogni push su `master` che modifica `version.txt` (oppure manualmente da GitHub Actions). Compila l'eseguibile Windows con PyInstaller, genera un vero installer con NSIS (script in `packaging\windows\installer.nsi`) e pubblica una GitHub Release con tag `v<versione presa da version.txt>` e `CollaudoSuite-Setup-<versione>.exe` come asset. L'installer crea le voci nel menu Start, il collegamento sul desktop e una disinstallazione da Pannello di controllo. La funzione "Verifica aggiornamenti" dell'app legge proprio questa release per proporre il download della nuova versione.
-
-## Downloader Giornali Macchina
-
-Lo script autonomo `scarica_giornali_macchina.py` cerca esclusivamente nella sezione Assets di JARVIS, apre i documenti associati a ciascun Asset e scarica quelli denominati `Giornale Macchina`. Sono accettate le varianti di scrittura (`giornale_macchina`, spazi, trattini e maiuscole/minuscole), ma vengono scaricati soltanto file Excel.
-
-È disponibile anche la versione grafica:
-
-```bat
-python scarica_giornali_macchina_gui.py
-```
-
-La GUI permette di inserire il token, scegliere la cartella di destinazione, simulare la ricerca e visualizzare il log senza bloccare la finestra. È possibile attivare l'organizzazione automatica per tipologia macchina (`NC300`, `TRINITY`, `GENYA`, `EVONIX`, `VIPER`, `EAGLE`, `WM`, `WP`); i casi non riconosciuti vengono salvati in `NON_IDENTIFICATA`.
-
-```bat
-python scarica_giornali_macchina.py --token IL_TOKEN --output Giornali_Macchina
-```
-
-Il token può essere passato anche con la variabile `JARVIS_AUTH_TOKEN`. Per verificare prima le corrispondenze senza scaricare file usare `--dry-run`.
-
-Per le API interne della pagina Assets può essere necessario il cookie di sessione del browser. Usare la variabile temporanea `JARVIS_AUTH_COOKIE` oppure il campo "Cookie sessione" della GUI; inserire solo il valore del cookie, senza `AuthCookie=`. Non salvare o condividere il cookie.
-
-La guida completa per token, cookie e troubleshooting è in [GUIDA_TOKEN_COOKIE_JARVIS.md](GUIDA_TOKEN_COOKIE_JARVIS.md).
