@@ -109,7 +109,7 @@ Il workflow `.github/workflows/build-installers.yml` si attiva a ogni push su `m
 
 ## Downloader Giornali Macchina
 
-Lo script autonomo `scarica_giornali_macchina.py` cerca nella directory Documentale/DMS di JARVIS le varianti di scrittura di `Giornale Macchina`, quindi scarica i documenti trovati. La ricerca negli allegati dei ticket è disponibile solo come sorgente opzionale.
+Lo script autonomo `scarica_giornali_macchina.py` cerca esclusivamente nella sezione Assets di JARVIS, apre i documenti associati a ciascun Asset e scarica quelli denominati `Giornale Macchina`. Sono accettate le varianti di scrittura (`giornale_macchina`, spazi, trattini e maiuscole/minuscole), ma vengono scaricati soltanto file Excel.
 
 È disponibile anche la versione grafica:
 
@@ -123,4 +123,8 @@ La GUI permette di inserire il token, scegliere la cartella di destinazione, sim
 python scarica_giornali_macchina.py --token IL_TOKEN --output Giornali_Macchina
 ```
 
-Il token può essere passato anche con la variabile `JARVIS_AUTH_TOKEN`. Per verificare prima le corrispondenze senza scaricare file usare `--dry-run`; `--source tickets` abilita eventualmente la vecchia ricerca negli allegati ticket.
+Il token può essere passato anche con la variabile `JARVIS_AUTH_TOKEN`. Per verificare prima le corrispondenze senza scaricare file usare `--dry-run`.
+
+Per le API interne della pagina Assets può essere necessario il cookie di sessione del browser. Usare la variabile temporanea `JARVIS_AUTH_COOKIE` oppure il campo "Cookie sessione" della GUI; inserire solo il valore del cookie, senza `AuthCookie=`. Non salvare o condividere il cookie.
+
+La guida completa per token, cookie e troubleshooting è in [GUIDA_TOKEN_COOKIE_JARVIS.md](GUIDA_TOKEN_COOKIE_JARVIS.md).

@@ -1,4 +1,4 @@
-"""Downloader dei documenti ``Giornale Macchina`` dalla directory DMS JARVIS."""
+"""Downloader dei documenti ``Giornale Macchina`` dalla sezione Assets JARVIS."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import threading
 import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
@@ -16,10 +17,13 @@ from urllib.request import Request, urlopen
 
 BASE_URL = "https://jarvis.breton.it"
 API_VERSION = "2"
+ASSET_SEARCH_PATH = "/api/v1/omnisearch/search"
+ASSET_DOCUMENTS_PATH = "/api/v2/SystemDocuments/Search"
+ASSET_DOWNLOAD_PATH = "/api/v2/download/openFile/{document_id}/{blob_id}/{file_name}"
 SEARCH_PATH = "/dms/api/public/document/search"
 CONTAINER_SEARCH_PATH = "/dms/api/public/container/search"
 DOCUMENT_DETAIL_PATH = "/dms/api/public/document/{document_id}"
-BROWSE_CONTAINER_PATH = "/dms/api/public/container/{container_id}/browse"
+BROWSE_CONTAINER_PATH = "/dms/api/public/container/{id}/browse"
 DOWNLOAD_PATH = "/dms/api/public/document/{document_id}/download/{file_id}"
 DOWNLOAD_DOCUMENT_PATH = "/dms/api/public/document/{document_id}/download"
 MACHINE_PREFIXES = (
@@ -27,6 +31,11 @@ MACHINE_PREFIXES = (
     "EVONIX", "VIPER", "EAGLE", "WMEE", "WMFE", "WMGE", "WMHE", "WMME",
     "WMRE", "WME", "WMF", "WMG", "WMH", "WMR", "WM", "WP", "NC",
 )
+ASSET_RESULT_WINDOW = 10000  # index.max_result_window di Elasticsearch
+# Caratteri usati per suddividere la ricerca WBS ("contiene") oltre il limite.
+WBS_SPLIT_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-._/"
+WBS_SPLIT_MAX_DEPTH = 6
+EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm"}
 
 
 def _normalise_name(value: Any) -> str:
@@ -37,6 +46,10 @@ def _normalise_name(value: Any) -> str:
 
 def is_giornale_macchina_name(value: Any) -> bool:
     return "giornalemacchina" in _normalise_name(value)
+
+
+def is_excel_filename(value: Any) -> bool:
+    return Path(str(value or "").strip()).suffix.casefold() in EXCEL_EXTENSIONS
 
 
 def machine_type_from_text(*values: Any) -> str:
@@ -84,6 +97,143 @@ def _request_json(token: str, path: str, payload: dict[str, Any]) -> dict[str, A
     return result
 
 
+def _request_asset_json(token: str, path: str, payload: dict[str, Any], *, auth_cookie: str = "") -> dict[str, Any]:
+    """Call the internal API used by the JARVIS Assets page."""
+    url = f"{BASE_URL}{path}"
+    print(f"[API >] POST {path}")
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Jarvis-Language": "it",
+    }
+    if auth_cookie.strip():
+        headers["Cookie"] = f"AuthCookie={auth_cookie.strip()}"
+    else:
+        headers["jarvis-auth-token"] = token
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            print(f"[API <] POST {path} -> HTTP {response.status}")
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        if exc.code == 403:
+            raise RuntimeError(
+                "JARVIS ha negato l'accesso alla sezione Assets (HTTP 403). "
+                "Usare un token/sessione con permesso di lettura Assets."
+            ) from exc
+        raise RuntimeError(f"HTTP {exc.code} su {path}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"JARVIS non raggiungibile: {exc.reason}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Risposta non valida da {path}.")
+    if result.get("success") is False:
+        raise RuntimeError(str(result.get("errorMessage") or result.get("message") or result))
+    return result
+
+
+def _request_asset_binary(token: str, path: str, *, auth_cookie: str = "") -> tuple[bytes, str]:
+    url = f"{BASE_URL}{path}"
+    print(f"[API >] GET {path} (download binario)")
+    headers = {
+        "Accept": "application/octet-stream",
+        "X-Jarvis-Language": "it",
+    }
+    if auth_cookie.strip():
+        headers["Cookie"] = f"AuthCookie={auth_cookie.strip()}"
+    else:
+        headers["jarvis-auth-token"] = token
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(
+        url,
+        headers=headers,
+    )
+    try:
+        with urlopen(request, timeout=120) as response:
+            content = response.read()
+            print(f"[API <] GET download -> HTTP {response.status}, {len(content)} byte")
+            return content, response.headers.get("Content-Disposition", "")
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"HTTP {exc.code} su download: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Download non riuscito: {exc.reason}") from exc
+
+
+def _asset_string_property(asset: dict[str, Any], key: str) -> str:
+    for prop in asset.get("stringProperties") or []:
+        if isinstance(prop, dict) and str(prop.get("key") or "") == key:
+            values = prop.get("value") or []
+            return str(values[0] or "").strip() if values else ""
+    return ""
+
+
+def _search_assets(
+    token: str,
+    *,
+    start_index: int,
+    chunk_size: int,
+    wbs: str = "",
+    auth_cookie: str = "",
+    exact: bool = True,
+) -> dict[str, Any]:
+    filters = []
+    if wbs.strip():
+        filters.append({"field": "wbs", "dataType": 0, "values": [wbs.strip()], "exactSearch": exact})
+    payload = {
+        "domainContext": "Assets",
+        "query": {
+            "filters": filters,
+            "startIndex": start_index,
+            "chunkSize": chunk_size,
+            "showArchived": False,
+        },
+    }
+    return _request_asset_json(token, ASSET_SEARCH_PATH, payload, auth_cookie=auth_cookie)
+
+
+def _search_asset_documents(token: str, asset_id: str, *, auth_cookie: str = "") -> list[dict[str, Any]]:
+    response = _request_asset_json(
+        token,
+        ASSET_DOCUMENTS_PATH,
+        {
+            "aggregateId": asset_id,
+            "filter": "",
+            "showVirtualPath": False,
+            "withoutFiles": False,
+            "getOnlyDocumentsWithoutSecondaryContext": False,
+            "metadataFilterComposition": 0,
+        },
+        auth_cookie=auth_cookie,
+    )
+    root = response.get("root") or {}
+    documents: list[dict[str, Any]] = []
+    visited: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        document_id = str(node.get("documentId") or "").strip()
+        if document_id and document_id not in visited and ("files" in node or "title" in node):
+            visited.add(document_id)
+            documents.append(node)
+        for key in ("documents", "folders", "containers", "children", "root"):
+            walk(node.get(key))
+
+    walk(root)
+    return documents
+
+
 def _request_binary(token: str, path: str, *, query: dict[str, Any] | None = None) -> tuple[bytes, str]:
     query = {"api-version": API_VERSION, **(query or {})}
     url = f"{BASE_URL}{path}?{urlencode(query)}"
@@ -123,7 +273,7 @@ def _request_json_get(token: str, path: str) -> dict[str, Any]:
 
 
 def _browse_container(token: str, container_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    response = _request_json_get(token, BROWSE_CONTAINER_PATH.format(container_id=quote(container_id, safe="")))
+    response = _request_json_get(token, BROWSE_CONTAINER_PATH.format(id=quote(container_id, safe="")))
     data = response.get("data")
     data = data if isinstance(data, dict) else {}
     containers = [item for item in data.get("containers") or [] if isinstance(item, dict)]
@@ -261,6 +411,63 @@ def _write_file(folder: Path, suggested_name: str, content: bytes, disposition: 
     return target
 
 
+def _iter_assets(
+    token: str,
+    *,
+    page_size: int,
+    max_pages: int,
+    wbs: str,
+    exact: bool,
+    auth_cookie: str,
+    stop_event: threading.Event | None,
+    seen: set[str],
+    depth: int = 0,
+) -> Iterable[dict[str, Any]]:
+    """Itera gli asset a blocchi; oltre i 10.000 risultati suddivide per WBS "contiene"."""
+    limit_hit = False
+    for page in range(max(1, int(max_pages))):
+        if stop_event is not None and stop_event.is_set():
+            return
+        start_index = page * page_size
+        if start_index >= ASSET_RESULT_WINDOW:
+            limit_hit = True
+            break
+        # startIndex + chunkSize non deve superare index.max_result_window.
+        chunk_size = min(page_size, ASSET_RESULT_WINDOW - start_index)
+        response = _search_assets(
+            token, start_index=start_index, chunk_size=chunk_size,
+            wbs=wbs, auth_cookie=auth_cookie, exact=exact,
+        )
+        rows = [item.get("item") for item in response.get("items") or [] if isinstance(item, dict)]
+        rows = [item for item in rows if isinstance(item, dict)]
+        if not rows:
+            return
+        print(f"[ASSETS] WBS~'{wbs or '*'}' pagina {page + 1}: {len(rows)} asset")
+        for asset in rows:
+            asset_id = str(asset.get("id") or "").strip()
+            if asset_id and asset_id in seen:
+                continue
+            if asset_id:
+                seen.add(asset_id)
+            yield asset
+        total = response.get("total")
+        if len(rows) < chunk_size or (isinstance(total, int) and start_index + len(rows) >= total):
+            return
+    if not limit_hit:
+        return
+    if exact or depth >= WBS_SPLIT_MAX_DEPTH:
+        print(f"[WARN] Limite di {ASSET_RESULT_WINDOW} risultati raggiunto per WBS '{wbs}': alcuni asset potrebbero mancare.", file=sys.stderr)
+        return
+    print(f"[INFO] Oltre {ASSET_RESULT_WINDOW} risultati per WBS '{wbs or '*'}': suddivido la ricerca.")
+    for char in WBS_SPLIT_ALPHABET:
+        if stop_event is not None and stop_event.is_set():
+            return
+        yield from _iter_assets(
+            token, page_size=page_size, max_pages=max_pages, wbs=wbs + char, exact=False,
+            auth_cookie=auth_cookie, stop_event=stop_event, seen=seen, depth=depth + 1,
+        )
+
+
 def download_documents(
     token: str,
     output: Path,
@@ -269,88 +476,98 @@ def download_documents(
     max_pages: int = 100000,
     dry_run: bool = False,
     organize_by_machine: bool = False,
+    wbs: str = "",
+    auth_cookie: str = "",
+    stop_event: threading.Event | None = None,
 ) -> tuple[int, int]:
-    """Search the JARVIS Documentale directory and download matching documents."""
+    """Search only JARVIS Assets and download their Giornale Macchina files."""
     token = str(token or "").strip()
     if not token:
         raise ValueError("Inserire un token JARVIS.")
+    if "\r" in token or "\n" in token:
+        raise ValueError("Il token JARVIS non può contenere righe multiple: incollare solo il token, non il log.")
     found = downloaded = 0
-    del page_size
     print(f"[START] Ricerca giornali macchina | simulazione={'sì' if dry_run else 'no'} | output={output}")
-    print(f"[START] Organizza per macchina={'sì' if organize_by_machine else 'no'} | limite cartelle={max_pages}")
-    directory_documents = list(_directory_documents(token, max_containers=max(1, max_pages)))
-    if not directory_documents:
-        print("[INFO] Nessun documento trovato attraversando Doc WBS: verifico solo i percorsi Doc WBS indicizzati.")
-        directory_documents = list(_search_documents_under_doc_wbs(token))
-    for document, container_path in directory_documents:
-        name = str(document.get("title") or document.get("fileName") or "").strip()
-        if not name or not is_giornale_macchina_name(name):
-            continue
-        found += 1
-        document_id = str(document.get("id") or "").strip()
-        print(f"[MATCH] {name} ({document_id}) | cartella: {container_path or 'root'}")
-        if dry_run:
-            continue
-        if not document_id:
-            print(f"[WARN] documento senza id: {name}", file=sys.stderr)
+    print(f"[START] Sorgente: JARVIS Assets | WBS={wbs.strip() or 'tutti'} | organizzazione per macchina={'sì' if organize_by_machine else 'no'}")
+    page_size = max(1, min(int(page_size), 100))
+    assets = _iter_assets(
+        token, page_size=page_size, max_pages=max_pages, wbs=wbs.strip(), exact=True,
+        auth_cookie=auth_cookie, stop_event=stop_event, seen=set(),
+    )
+    for asset in assets:
+        if stop_event is not None and stop_event.is_set():
+            print("[STOP] Arresto richiesto dall'utente.")
+            return found, downloaded
+        asset_id = str(asset.get("id") or "").strip()
+        asset_title = str(asset.get("title") or asset_id).strip()
+        if not asset_id:
             continue
         try:
-            detail = _request_json_get(
-                token,
-                DOCUMENT_DETAIL_PATH.format(document_id=quote(document_id, safe="")),
-            ).get("data")
-            detail = detail if isinstance(detail, dict) else {}
-            file_id = str(detail.get("defaultFileId") or detail.get("defaultBlobId") or "").strip()
-            file_info_name = ""
-            if not file_id:
-                # The current JARVIS UI document model exposes file IDs in
-                # filesInfo rather than defaultFileId/defaultBlobId.
-                file_infos = detail.get("filesInfo") or detail.get("files") or []
-                if isinstance(file_infos, dict):
-                    file_infos = [file_infos]
-                if isinstance(file_infos, list):
-                    main_file = next(
-                        (item for item in file_infos if isinstance(item, dict) and item.get("isMain")),
-                        next((item for item in file_infos if isinstance(item, dict)), {}),
-                    )
-                    file_id = str(main_file.get("fileId") or main_file.get("blobId") or "").strip()
-                    file_info_name = str(main_file.get("name") or "").strip()
-            download_name = str(detail.get("fileName") or file_info_name or name).strip()
-            if file_id:
-                content, disposition = _request_binary(
-                    token,
-                    DOWNLOAD_PATH.format(document_id=quote(document_id, safe=""), file_id=quote(file_id, safe="")),
-                    query={"fileName": download_name, "format": "original"},
-                )
-            else:
-                content, disposition = _request_binary(
-                    token,
-                    DOWNLOAD_DOCUMENT_PATH.format(document_id=quote(document_id, safe="")),
-                    query={"fileName": download_name},
-                )
-            machine_type = machine_type_from_text(container_path, name)
-            document_folder = output / "documenti"
-            if organize_by_machine:
-                document_folder /= machine_type
-            if container_path:
-                for segment in container_path.split(" / "):
-                    document_folder /= _safe_filename(segment, "cartella")
-            target = _write_file(document_folder, download_name, content, disposition, f"{document_id}.bin")
-            downloaded += 1
-            print(f"[OK] {target}")
+            documents = _search_asset_documents(token, asset_id, auth_cookie=auth_cookie)
         except RuntimeError as exc:
-            print(f"[WARN] {name}: {exc}", file=sys.stderr)
+            print(f"[WARN] {asset_title}: {exc}", file=sys.stderr)
+            continue
+        for document in documents:
+            if stop_event is not None and stop_event.is_set():
+                print("[STOP] Arresto richiesto dall'utente.")
+                return found, downloaded
+            name = str(document.get("title") or "").strip()
+            files = [item for item in document.get("files") or [] if isinstance(item, dict)]
+            matching_files = [
+                item for item in files
+                if is_excel_filename(item.get("fileName"))
+                and is_giornale_macchina_name(item.get("fileName"))
+            ]
+            if is_giornale_macchina_name(name):
+                matching_files = [item for item in files if is_excel_filename(item.get("fileName"))]
+            if not matching_files:
+                continue
+            for file_info in matching_files:
+                document_id = str(document.get("documentId") or "").strip()
+                blob_id = str(file_info.get("blobId") or "").strip()
+                download_name = str(file_info.get("fileName") or name or "giornale_macchina.bin").strip()
+                found += 1
+                print(f"[MATCH] {name} | {asset_title} ({asset_id}) | {download_name}")
+                if dry_run:
+                    continue
+                if not document_id or not blob_id:
+                    print(f"[WARN] file senza documentId/blobId: {download_name}", file=sys.stderr)
+                    continue
+                try:
+                    content, disposition = _request_asset_binary(
+                        token,
+                        ASSET_DOWNLOAD_PATH.format(
+                            document_id=quote(document_id, safe=""),
+                            blob_id=quote(blob_id, safe=""),
+                            file_name=quote(download_name, safe=""),
+                        ),
+                        auth_cookie=auth_cookie,
+                    )
+                    machine_type = machine_type_from_text(asset_title, _asset_string_property(asset, "matnr"))
+                    document_folder = output / "documenti"
+                    if organize_by_machine:
+                        document_folder /= machine_type
+                    document_folder /= _safe_filename(asset_title, asset_id)
+                    target = _write_file(document_folder, download_name, content, disposition, f"{document_id}.bin")
+                    downloaded += 1
+                    print(f"[OK] {target}")
+                except RuntimeError as exc:
+                    print(f"[WARN] {download_name}: {exc}", file=sys.stderr)
+    if stop_event is not None and stop_event.is_set():
+        print("[STOP] Arresto richiesto dall'utente.")
     return found, downloaded
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Scarica i Giornali Macchina dalla directory DMS JARVIS.")
+    parser = argparse.ArgumentParser(description="Scarica i Giornali Macchina dalla sezione Assets JARVIS.")
     parser.add_argument("--token", default=os.environ.get("JARVIS_AUTH_TOKEN", ""))
     parser.add_argument("--output", type=Path, default=Path("Giornali_Macchina"))
     parser.add_argument("--page-size", type=int, default=100)
-    parser.add_argument("--max-pages", type=int, default=100000, help="Numero massimo di cartelle DMS da attraversare.")
+    parser.add_argument("--max-pages", type=int, default=100000, help="Numero massimo di pagine Assets da leggere.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--organize-by-machine", action="store_true", help="Crea una sottocartella per tipologia macchina.")
+    parser.add_argument("--wbs", default="", help="Limita la ricerca all'Asset con questo codice WBS.")
+    parser.add_argument("--auth-cookie", default=os.environ.get("JARVIS_AUTH_COOKIE", ""), help="Valore del cookie AuthCookie; preferire JARVIS_AUTH_COOKIE.")
     args = parser.parse_args()
     if not args.token.strip():
         parser.error("specificare --token oppure impostare JARVIS_AUTH_TOKEN")
@@ -362,6 +579,8 @@ def main() -> int:
             max_pages=args.max_pages,
             dry_run=args.dry_run,
             organize_by_machine=args.organize_by_machine,
+            wbs=args.wbs,
+            auth_cookie=args.auth_cookie,
         )
     except Exception as exc:
         print(f"Errore: {exc}", file=sys.stderr)
