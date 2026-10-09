@@ -35,6 +35,7 @@ ASSET_RESULT_WINDOW = 10000  # index.max_result_window di Elasticsearch
 # Caratteri usati per suddividere la ricerca WBS ("contiene") oltre il limite.
 WBS_SPLIT_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-._/"
 WBS_SPLIT_MAX_DEPTH = 6
+STATE_FILENAME = "asset_elaborati.txt"  # asset già completati, per riprendere la run
 EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm"}
 
 
@@ -413,10 +414,28 @@ def _write_file(folder: Path, suggested_name: str, content: bytes, disposition: 
         stem, suffix = target.stem, target.suffix
         index = 2
         while target.exists():
+            if target.read_bytes() == content:
+                return target  # già scaricato in una run precedente
             target = folder / f"{stem}_{index}{suffix}"
             index += 1
     target.write_bytes(content)
     return target
+
+
+def _load_completed(path: Path) -> set[str]:
+    try:
+        return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
+    except OSError:
+        return set()
+
+
+def _append_completed(path: Path, asset_id: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(asset_id + "\n")
+    except OSError as exc:
+        print(f"[WARN] Stato di ripresa non salvato: {exc}", file=sys.stderr)
 
 
 def _iter_assets(
@@ -498,6 +517,10 @@ def download_documents(
     print(f"[START] Ricerca giornali macchina | simulazione={'sì' if dry_run else 'no'} | output={output}")
     print(f"[START] Sorgente: JARVIS Assets | WBS={wbs.strip() or 'tutti'} | organizzazione per macchina={'sì' if organize_by_machine else 'no'}")
     page_size = max(1, min(int(page_size), 100))
+    state_path = output / STATE_FILENAME
+    completed = _load_completed(state_path)
+    if completed:
+        print(f"[RIPRESA] {len(completed)} asset già elaborati in precedenza: verranno saltati.")
     assets = _iter_assets(
         token, page_size=page_size, max_pages=max_pages, wbs=wbs.strip(), exact=bool(wbs.strip()),
         auth_cookie=auth_cookie, stop_event=stop_event, seen=set(),
@@ -508,8 +531,9 @@ def download_documents(
             return found, downloaded
         asset_id = str(asset.get("id") or "").strip()
         asset_title = str(asset.get("title") or asset_id).strip()
-        if not asset_id:
+        if not asset_id or asset_id in completed:
             continue
+        asset_ok = True
         try:
             documents = _search_asset_documents(token, asset_id, auth_cookie=auth_cookie)
         except RuntimeError as exc:
@@ -540,6 +564,7 @@ def download_documents(
                     continue
                 if not document_id or not blob_id:
                     print(f"[WARN] file senza documentId/blobId: {download_name}", file=sys.stderr)
+                    asset_ok = False
                     continue
                 try:
                     content, disposition = _request_asset_binary(
@@ -561,6 +586,10 @@ def download_documents(
                     print(f"[OK] {target}")
                 except RuntimeError as exc:
                     print(f"[WARN] {download_name}: {exc}", file=sys.stderr)
+                    asset_ok = False
+        if asset_ok and not dry_run:
+            completed.add(asset_id)
+            _append_completed(state_path, asset_id)
     if stop_event is not None and stop_event.is_set():
         print("[STOP] Arresto richiesto dall'utente.")
     return found, downloaded
