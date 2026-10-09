@@ -119,8 +119,16 @@ def _request_asset_json(token: str, path: str, payload: dict[str, Any], *, auth_
     )
     try:
         with urlopen(request, timeout=60) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            print(f"[API <] POST {path} -> HTTP {response.status}")
+            raw = response.read().decode("utf-8", errors="replace")
+            content_type = response.headers.get("Content-Type", "")
+            print(f"[API <] POST {path} -> HTTP {response.status} {content_type}, {len(raw)} caratteri")
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Risposta non JSON da {path} (HTTP {response.status}, {content_type or 'tipo ignoto'}): "
+                    f"{raw[:200].strip() or 'corpo vuoto'}. Token o cookie probabilmente scaduti: rieffettuare il login in JARVIS."
+                ) from exc
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:500]
         if exc.code == 403:
