@@ -19,13 +19,16 @@ StatusFn = Callable[[str], None]
 StopFn = Callable[[], bool]
 
 
-def _period_bounds(months_back: int) -> tuple[date, date]:
+def _period_bounds(months_back: int) -> tuple[date, date] | tuple[None, None]:
     """Return the inclusive calendar-month period ending today.
 
     For example, on 2 October, six months means 1 May through 2 October.
+    ``0`` means no time constraint: returns ``(None, None)``.
     """
+    if months_back == 0:
+        return None, None
     if months_back not in {1, 3, 6, 12}:
-        raise ValueError("Il periodo deve essere di 1, 3, 6 o 12 mesi.")
+        raise ValueError("Il periodo deve essere di 1, 3, 6, 12 mesi oppure 0 (nessun limite).")
     end = date.today()
     month_index = end.year * 12 + end.month - 1 - (months_back - 1)
     start_year, start_month_zero = divmod(month_index, 12)
@@ -157,7 +160,9 @@ class ExcelDataLoader:
                             else:
                                 invalid_dates += 1
 
-                    if date_iso is None or not (period_start.isoformat() <= date_iso <= period_end.isoformat()):
+                    if period_start is not None and period_end is not None and (
+                        date_iso is None or not (period_start.isoformat() <= date_iso <= period_end.isoformat())
+                    ):
                         excluded_by_period += 1
                         continue
 
@@ -193,9 +198,12 @@ class ExcelDataLoader:
         else:
             self.log("Nessuna riga utile letta.\n")
 
-        self.log(
-            f"Periodo anomalie: {period_start.isoformat()} - {period_end.isoformat()} "
-            f"({self.params.period_months} mesi). Righe escluse dal periodo: {excluded_by_period}.\n"
-        )
+        if period_start is None or period_end is None:
+            self.log("Periodo anomalie: nessun vincolo temporale.\n")
+        else:
+            self.log(
+                f"Periodo anomalie: {period_start.isoformat()} - {period_end.isoformat()} "
+                f"({self.params.period_months} mesi). Righe escluse dal periodo: {excluded_by_period}.\n"
+            )
 
         return records, self.warnings

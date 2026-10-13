@@ -133,6 +133,7 @@ class AnalyzerWindow(QMainWindow):
         self.combo_period.addItem("3 mesi", 3)
         self.combo_period.addItem("6 mesi", 6)
         self.combo_period.addItem("1 anno", 12)
+        self.combo_period.addItem("Nessun limite", 0)
         self.combo_period.setCurrentIndex(3)
         enable_styled_combo_popup(self.combo_period)
         period_grid.addWidget(self.combo_period, 1, 0)
@@ -321,7 +322,7 @@ class AnalyzerWindow(QMainWindow):
             files=self.selected_files,
             keyword=self.txt_key.text().strip(),
             keyword_threshold=self.spin_keyword_threshold.value(),
-            period_months=int(self.combo_period.currentData() or 12),
+            period_months=int(self.combo_period.currentData() if self.combo_period.currentData() is not None else 12),
             threshold=self.spin_thresh.value(),
             min_occurrences=self.spin_occ.value(),
             start_cell=self.txt_start.text().strip().upper(),

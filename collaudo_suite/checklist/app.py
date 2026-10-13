@@ -95,7 +95,7 @@ class MapLoadWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, path: Path, filter_text: str, reference_date: date, months_back: int) -> None:
+    def __init__(self, path: Path, filter_text: str, reference_date: date, months_back: int | None) -> None:
         super().__init__()
         self.path = path
         self.filter_text = filter_text
@@ -257,9 +257,11 @@ class ChecklistWindow(QMainWindow):
         self.map_period_combo.addItem("3 mesi", 3)
         self.map_period_combo.addItem("6 mesi", 6)
         self.map_period_combo.addItem("1 anno", 12)
+        self.map_period_combo.addItem("Nessun limite", 0)
         self.map_period_combo.setCurrentIndex(self.map_period_combo.findData(12))
         self.map_period_combo.setToolTip(
-            "Considera solo i MAP compresi tra la data di collaudo e il periodo precedente selezionato."
+            "Considera solo i MAP compresi tra la data di collaudo e il periodo precedente selezionato. "
+            "'Nessun limite' disattiva il vincolo temporale."
         )
         map_layout.addWidget(QLabel("Periodo MAP rispetto alla data di collaudo:"))
         map_layout.addWidget(self.map_period_combo)
@@ -467,7 +469,8 @@ class ChecklistWindow(QMainWindow):
             months = int(value)
         except (TypeError, ValueError):
             months = 12
-        return months if months in {1, 3, 6, 12} else 12
+        # 0 = nessun vincolo temporale.
+        return months if months in {0, 1, 3, 6, 12} else 12
 
     def _collaudo_reference_date(self) -> date:
         selected = self.date_edit.date()
@@ -475,6 +478,11 @@ class ChecklistWindow(QMainWindow):
 
     def _map_period_label(self) -> str:
         return self.map_period_combo.currentText().strip() or "1 anno"
+
+    def _map_period_description(self) -> str:
+        if self._selected_map_period_months() == 0:
+            return "nessun vincolo temporale"
+        return f"{self._map_period_label()} fino al {self.date_edit.date().toString('dd/MM/yyyy')}"
 
     def _selected_map_path(self) -> Path:
         path_text = self.map_file_edit.text().strip()
@@ -667,7 +675,7 @@ class ChecklistWindow(QMainWindow):
             path,
             map_filter,
             reference_date=self._collaudo_reference_date(),
-            months_back=self._selected_map_period_months(),
+            months_back=self._selected_map_period_months() or None,
         )
         worker.moveToThread(thread)
         worker.finished.connect(self._on_map_load_finished)
@@ -758,7 +766,7 @@ class ChecklistWindow(QMainWindow):
                 f"Anteprima: {map_count} segnalazioni MAP random + "
                 f"{analyzer_count} controlli Analyzer = {len(self.current_items)} controlli totali. "
                 f"Pool MAP Commercial code '{map_filter or 'Tutti'}': {len(self.map_pool)}. "
-                f"Periodo: {self._map_period_label()} fino al {self.date_edit.date().toString('dd/MM/yyyy')}. "
+                f"Periodo: {self._map_period_description()}. "
                 f"Fonte MAP: {'JARVIS API' if self._selected_map_source() == 'jarvis' else 'file riepilogativo'}. "
                 "Estrazione casuale a ogni aggiornamento."
             )
