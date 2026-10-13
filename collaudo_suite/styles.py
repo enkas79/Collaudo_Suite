@@ -56,6 +56,8 @@ QMainWindow {{ background: #f5f6fa; }}
     min-height: 0; padding: 0; margin: 0; border: none; background: transparent; color: {TEXT_ON_DARK};
     selection-background-color: {ACCENT_BLUE}; selection-color: {TEXT_ON_DARK};
 }}
+/* Con NoButtons il QSS lascia al QLineEdit interno 1px di larghezza: definisco i pulsanti a larghezza 0 per restituirgli lo spazio. */
+#sidebar QSpinBox::up-button, #sidebar QSpinBox::down-button {{ width: 0; border: none; }}
 #sidebar QComboBox QAbstractItemView {{
     background: {SIDEBAR_FIELD_BG}; color: {TEXT_ON_DARK};
     border: 1px solid {SIDEBAR_FIELD_BORDER};

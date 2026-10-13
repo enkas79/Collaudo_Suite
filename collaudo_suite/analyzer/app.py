@@ -11,7 +11,6 @@ from PySide6.QtCore import Qt, QStandardPaths, Signal
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -299,7 +298,6 @@ class AnalyzerWindow(QMainWindow):
         spin.setValue(value)
         spin.setSingleStep(step)
         spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         return spin
 
     def _toggle_sheet_field(self) -> None:
